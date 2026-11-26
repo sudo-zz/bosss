@@ -10,7 +10,7 @@ export type Stage =
 
 export type StageMeta = { key: Stage; label: string; tone: string }
 
-export type CandidateSource = 'message' | 'recommend' | 'featured'
+export type CandidateSource = 'message' | 'recommend' | 'featured' | 'external'
 
 export type ChatMessage = {
   text: string

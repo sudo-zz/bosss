@@ -28,12 +28,20 @@ export const SOURCE_META: Record<
       'border-amber-500/30 bg-amber-500/12 text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/15 dark:text-amber-300',
     dotClass: 'bg-amber-500',
   },
+  external: {
+    label: '外部简历',
+    shortLabel: '外部',
+    className:
+      'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-500/15 dark:text-emerald-300',
+    dotClass: 'bg-emerald-500',
+  },
 }
 
 export function normalizeSource(raw?: string): CandidateSource {
   const v = String(raw || '').trim().toLowerCase()
   if (v === 'featured' || v === 'selected' || v === 'jingxuan' || v === '精选') return 'featured'
   if (v === 'recommend' || v === '推荐') return 'recommend'
+  if (v === 'external' || v === '外部' || v === '外部简历') return 'external'
   return 'message'
 }
 
@@ -248,6 +256,14 @@ export function candidateActivityAt(candidate: Candidate): number {
  * 比裸分数更容易理解，也不依赖大模型调用。
  */
 export function oneSentenceSummary(candidate: Candidate): string {
+  // 外部导入简历的摘要是按简历内容写好的，直接用，避免拼出「擅长上海奉贤本地」这类句子
+  if (candidate.source === 'external') {
+    const brief = (candidate.summary || '').trim()
+    if (brief && !NOISE_TEXT_RE.test(brief) && !isProfileSummaryString(brief)) {
+      return compactText(brief, 96)
+    }
+  }
+
   const f = resolvedFacts(candidate)
   const expText = f.exp ? (/^\d+(?:-\d+)?年$/.test(f.exp) ? `${f.exp}经验` : f.exp) : ''
   const bg = [expText, f.edu].filter(Boolean).join(' · ')

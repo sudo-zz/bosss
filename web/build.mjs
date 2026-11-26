@@ -190,6 +190,7 @@ function normalizeSource(raw) {
   const v = String(raw || '').trim().toLowerCase();
   if (v === 'featured' || v === 'selected' || v === 'jingxuan' || v === '精选') return 'featured';
   if (v === 'recommend' || v === '推荐') return 'recommend';
+  if (v === 'external' || v === '外部' || v === '外部简历') return 'external';
   return 'message';
 }
 
@@ -307,10 +308,10 @@ function mergeCandidates({ tracker, scoredXmt, scoredAi, evalByName, evalPdfByNa
       summary: t?.summary || c.reason || '',
       reason: t?.reason || c.reason || '',
       facts,
-      dimensions: c.dimensions || null,
-      dimMeta: c.dimensions ? DIM_META : null,
-      highlights: (c.highlights || []).slice(0, 4),
-      risks: (c.risks || []).slice(0, 3),
+      dimensions: c.dimensions || t?.dimensions || null,
+      dimMeta: c.dimensions || t?.dimensions ? DIM_META : null,
+      highlights: (t?.highlights?.length ? t.highlights : c.highlights || []).slice(0, 4),
+      risks: (t?.risks?.length ? t.risks : c.risks || []).slice(0, 3),
       messages: (c.messages || []).slice(-8),
       lastText: lastFriendText(c.messages) || (c.msgText || '').slice(0, 60),
       lastTime: c.listTime || '',
@@ -355,11 +356,11 @@ function mergeCandidates({ tracker, scoredXmt, scoredAi, evalByName, evalPdfByNa
       tierLabel: '',
       summary: t.summary || '',
       reason: t.reason || '',
-      facts: normSummary(t.summary || ''),
-      dimensions: null,
-      dimMeta: null,
-      highlights: [],
-      risks: [],
+      facts: t.facts || normSummary(t.summary || ''),
+      dimensions: t.dimensions || null,
+      dimMeta: t.dimensions ? DIM_META : null,
+      highlights: (t.highlights || []).slice(0, 4),
+      risks: (t.risks || []).slice(0, 3),
       messages: [],
       lastText: t.summary || '',
       lastTime: '',
@@ -380,6 +381,15 @@ function mergeCandidates({ tracker, scoredXmt, scoredAi, evalByName, evalPdfByNa
       updatedAt: t.updatedAt || '',
       history: t.history || [],
     });
+  }
+
+  // 同名同岗位的不同候选人（如「陈先生」「张女士」）会生成相同 id，
+  // 作为 React key 会导致筛选时列表残留旧节点，这里强制唯一。
+  const idSeen = new Map();
+  for (const row of rows) {
+    const n = (idSeen.get(row.id) || 0) + 1;
+    idSeen.set(row.id, n);
+    if (n > 1) row.id = `${row.id}#${n}`;
   }
 
   // 合并推荐牛人 / 精选牛人快照中尚未进入 tracker 的候选人
@@ -468,7 +478,7 @@ function lastFriendText(messages = []) {
 function buildStats(rows, quota) {
   const byStage = Object.fromEntries(STAGES.map((s) => [s.key, 0]));
   const byJob = Object.fromEntries(POSITIONS.map((p) => [p.id, 0]));
-  const bySource = { message: 0, recommend: 0, featured: 0 };
+  const bySource = { message: 0, recommend: 0, featured: 0, external: 0 };
   const byJobAndSource = {};
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
@@ -481,7 +491,7 @@ function buildStats(rows, quota) {
     byStage[r.stage] = (byStage[r.stage] || 0) + 1;
     byJob[r.positionId] = (byJob[r.positionId] || 0) + 1;
     bySource[src] = (bySource[src] || 0) + 1;
-    if (!byJobAndSource[r.positionId]) byJobAndSource[r.positionId] = { message: 0, recommend: 0, featured: 0 };
+    if (!byJobAndSource[r.positionId]) byJobAndSource[r.positionId] = { message: 0, recommend: 0, featured: 0, external: 0 };
     byJobAndSource[r.positionId][src] = (byJobAndSource[r.positionId][src] || 0) + 1;
     if (r.createdAt && new Date(r.createdAt) >= startOfDay) todayNew++;
     if (r.messages.length) withMessages++;

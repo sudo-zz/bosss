@@ -22,6 +22,18 @@ export const CANDIDATE_STAGES = [
 
 export type CandidateStage = (typeof CANDIDATE_STAGES)[number];
 
+/** 结构化展示用的事实（外部导入简历等没有 BOSS 列表信息时由导入器写入） */
+export type CandidateFacts = {
+  age?: string;
+  exp?: string;
+  edu?: string;
+  city?: string;
+  salary?: string;
+  roleText?: string;
+  latestWork?: string;
+  school?: string;
+};
+
 export type TrackedCandidate = {
   id: string;
   geekId?: string;
@@ -37,6 +49,10 @@ export type TrackedCandidate = {
   summary?: string;
   reason?: string;
   notes?: string;
+  facts?: CandidateFacts;
+  dimensions?: Record<string, number>;
+  highlights?: string[];
+  risks?: string[];
   resumeTextPath?: string;
   resumeScreenshotPath?: string;
   resumePdfPath?: string;
@@ -144,6 +160,10 @@ export function upsertTrackedCandidate(input: {
   summary?: string;
   reason?: string;
   notes?: string;
+  facts?: CandidateFacts;
+  dimensions?: Record<string, number>;
+  highlights?: string[];
+  risks?: string[];
   resumeTextPath?: string;
   resumeScreenshotPath?: string;
   resumePdfPath?: string;
@@ -175,6 +195,10 @@ export function upsertTrackedCandidate(input: {
     summary: input.summary?.trim() || existing?.summary,
     reason: input.reason?.trim() || existing?.reason,
     notes: input.notes?.trim() || existing?.notes,
+    facts: input.facts ?? existing?.facts,
+    dimensions: input.dimensions ?? existing?.dimensions,
+    highlights: input.highlights ?? existing?.highlights,
+    risks: input.risks ?? existing?.risks,
     resumeTextPath: input.resumeTextPath || existing?.resumeTextPath,
     resumeScreenshotPath: input.resumeScreenshotPath || existing?.resumeScreenshotPath,
     resumePdfPath: input.resumePdfPath || existing?.resumePdfPath,

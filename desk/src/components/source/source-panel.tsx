@@ -7,6 +7,7 @@ import {
   Copy,
   Crown,
   FileText,
+  FileUp,
   Flame,
   Globe,
   Hand,
@@ -132,7 +133,7 @@ export function SourcePanel() {
   )
 
   const sourceCounts = useMemo(() => {
-    const counts: Record<CandidateSource, number> = { message: 0, recommend: 0, featured: 0 }
+    const counts: Record<CandidateSource, number> = { message: 0, recommend: 0, featured: 0, external: 0 }
     for (const c of positionScoped) {
       counts[normalizeSource(c.source)] += 1
     }
@@ -234,7 +235,7 @@ export function SourcePanel() {
           label={sourceFilter === 'all' ? '在库候选人' : SOURCE_META[sourceFilter].label}
           value={sourceScoped.length}
           unit="人"
-          hint={`私聊 ${sourceCounts.message} · 推荐 ${sourceCounts.recommend} · 精选 ${sourceCounts.featured}`}
+          hint={`私聊 ${sourceCounts.message} · 推荐 ${sourceCounts.recommend} · 精选 ${sourceCounts.featured}${sourceCounts.external ? ` · 外部 ${sourceCounts.external}` : ''}`}
           active={sourceFilter === 'all' && stage === 'all' && quickFilter === 'all'}
           onClick={resetSourceFilters}
         />
@@ -312,6 +313,16 @@ export function SourcePanel() {
             count={sourceCounts.featured}
             dotClass={SOURCE_META.featured.dotClass}
           />
+          {sourceCounts.external > 0 && (
+            <SourceTabChip
+              active={sourceFilter === 'external'}
+              onClick={() => setSourceFilter('external')}
+              icon={FileUp}
+              label="外部"
+              count={sourceCounts.external}
+              dotClass={SOURCE_META.external.dotClass}
+            />
+          )}
         </div>
       </div>
 

@@ -233,7 +233,11 @@ export function CandidateDetail({ candidate }: { candidate: Candidate | null }) 
             className="gap-1.5"
           >
             <Globe className={cn('size-3.5', hasLocalOnline && 'text-emerald-600 dark:text-emerald-400')} />
-            {hasLocalOnline ? 'Boss 在线简历' : '在线简历（未转存）'}
+            {hasLocalOnline
+              ? candidate.source === 'external'
+                ? '简历详情'
+                : 'Boss 在线简历'
+              : '在线简历（未转存）'}
           </Button>
           {evalExists && (
             <Button
