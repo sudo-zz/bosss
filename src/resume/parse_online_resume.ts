@@ -97,7 +97,7 @@ function isNoise(text: string): boolean {
   if (NOISE_RE.test(text)) return true;
   // BOSS 简历页脚的法律声明
   if (/为爱护牛人|BOSS直聘平台提交|未经BOSS直聘|第三方平台进行复制|任何用户原则上仅可用于/.test(text)) return true;
-  if (text.length <= 1 && !/[\u4e00-\u9fa5]/.test(text)) return true;
+  if (text.length <= 1) return true;
   return false;
 }
 
@@ -152,6 +152,9 @@ function groupVisualLines(lines: OcrLineLike[]): VisualLine[] {
         last.right = last.right ? `${last.right} ${text}` : text;
         continue;
       }
+      // 两轮 OCR 常把同一段文字识别出细微差异，已包含则跳过
+      const lk = looseKey(text);
+      if (lk && looseKey(last.left).includes(lk)) continue;
       last.left = `${last.left}${needsSpace(last.left, text) ? ' ' : ''}${text}`;
       last.height = Math.max(last.height, l.h ?? 0);
       continue;
@@ -254,6 +257,43 @@ function extractTagLine(line: string): string[] | null {
   return parts;
 }
 
+/** 折叠整段重复（「大学英语四级大学英语四级」→「大学英语四级」） */
+function collapseDoubled(text: string): string {
+  let out = text.trim();
+  for (let i = 0; i < 3; i++) {
+    const half = Math.floor(out.length / 2);
+    if (half < 4) break;
+    const a = out.slice(0, half);
+    const b = out.slice(half);
+    if (a === b) {
+      out = a;
+      continue;
+    }
+    break;
+  }
+  return out;
+}
+
+/** 段落去重：完全重复或高相似（跨屏重复采集）只保留更完整的一条 */
+function dedupeParagraphs(paragraphs: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of paragraphs) {
+    const p = collapseDoubled(raw);
+    if (!p) continue;
+    const kp = looseKey(p);
+    const dupIdx = out.findIndex((exist) => {
+      const ke = looseKey(exist);
+      if (ke === kp) return true;
+      const shorter = ke.length < kp.length ? ke : kp;
+      const longer = ke.length < kp.length ? kp : ke;
+      return shorter.length >= 20 && longer.startsWith(shorter);
+    });
+    if (dupIdx === -1) out.push(p);
+    else if (p.length > out[dupIdx].length) out[dupIdx] = p;
+  }
+  return out;
+}
+
 function joinWrapped(prev: string, next: string): string {
   const a = prev.slice(-1);
   const b = next.slice(0, 1);
@@ -268,10 +308,23 @@ function joinWrapped(prev: string, next: string): string {
   return `${prev}${next}`;
 }
 
-function finalizeSections(sections: OnlineResumeSection[]): OnlineResumeSection[] {
+function finalizeSections(input: OnlineResumeSection[]): OnlineResumeSection[] {
+  // 长简历滚动采集时，末尾几屏会重复出现同样的区块，先按 key 合并
+  const sections: OnlineResumeSection[] = [];
+  for (const sec of input) {
+    const exist = sections.find((s) => s.key === sec.key);
+    if (!exist) {
+      sections.push({ ...sec, items: [...sec.items], paragraphs: [...(sec.paragraphs ?? [])] });
+      continue;
+    }
+    exist.items.push(...sec.items);
+    exist.paragraphs = [...(exist.paragraphs ?? []), ...(sec.paragraphs ?? [])];
+    if (sec.tags?.length) exist.tags = [...(exist.tags ?? []), ...sec.tags];
+  }
+
   for (const sec of sections) {
     if (sec.paragraphs?.length) {
-      sec.paragraphs = mergeWrappedLines(sec.paragraphs);
+      sec.paragraphs = dedupeParagraphs(mergeWrappedLines(sec.paragraphs));
     }
     // 多屏滚动采集会在相邻屏重复出现同一条经历，按「公司/学校 + 时间」去重并保留更完整的一份
     if (sec.items.length > 1) {
@@ -473,7 +526,7 @@ export function parseResumeOcrLines(
       const text = cleanText(l.text);
       if (TITLE_TO_KEY.has(text.replace(/\s+/g, ''))) return false;
       const dx = l.x - bodyLeft;
-      return (dx >= -0.06 && dx <= 0.13) || PERIOD_RE.test(text);
+      return (dx >= -0.06 && dx <= 0.34) || PERIOD_RE.test(text);
     });
     const lines = groupVisualLines(body);
 
@@ -547,7 +600,7 @@ export function parseResumeOcrLines(
   for (let i = cursor; i < Math.min(lineEvents.length, cursor + 3); i++) {
     const t = lineEvents[i].line.left;
     if (!out.headline && /(\d{2}\s*岁|本科|硕士|大专|博士|在职|离职|应届)/.test(t)) {
-      out.headline = t;
+      out.headline = collapseRepeats(t).replace(/(?<=[\u4e00-\u9fa5])一(?=\d)/g, '｜');
       cursor = i + 1;
       break;
     }
@@ -590,16 +643,19 @@ export function parseResumeOcrLines(
 
     // 期望行：记录期望信息；无标题时单独切成「期望职位」区块
     if (isExpectationLine(text)) {
-      if (!out.expectation) {
-        const parts = text.split(/\s*[｜|]\s*/).filter(Boolean);
-        out.expectation = { city: parts[0], position: parts[1], industry: parts[2], salary: parts[3] };
-      }
+      if (!out.expectation) out.expectation = parseExpectationLine(text);
       const cur = current as OnlineResumeSection | null;
-      if (!hasTitle && cur?.key !== 'expectation') {
+      if (cur?.key === 'expectation') {
+        cur.paragraphs = [...(cur.paragraphs ?? []), text];
+        continue;
+      }
+      if (!hasTitle) {
         const sec = openSection('expectation', '期望职位');
         sec.paragraphs = [text];
         continue;
       }
+      // 有区块标题但没识别到「期望职位」时（如 BOSS 的「最近关注」），期望信息已在头部展示，跳过该行
+      continue;
     }
 
     // 无标题兜底：按内容特征推断区块
@@ -674,6 +730,40 @@ const SALARY_RE = /(K|k|元\/月|元\/天|面议|薪)/;
 
 function isExpectationLine(text: string): boolean {
   return EXPECT_RE.test(text) && SALARY_RE.test(text);
+}
+
+/** 「杭州&上海｜Python｜行业不限｜10-15K」→ 城市 / 职位 / 行业 / 薪资（容忍 OCR 丢分隔符） */
+function parseExpectationLine(text: string): OnlineResumeStructured['expectation'] {
+  const salary = /\d+\s*[-~]\s*\d+\s*[Kk]|面议|\d+\s*[Kk]以内/.exec(text)?.[0]?.replace(/\s+/g, '');
+  const rest = salary ? text.replace(salary, '') : text;
+  const parts = rest
+    .split(/\s*[｜|]\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  let city = parts[0] || '';
+  let position = parts[1] || '';
+  let industry = parts[2] || '';
+
+  if (!industry && position) {
+    const segs = position.split(/\s+/).filter(Boolean);
+    if (segs.length >= 2) {
+      position = segs[0];
+      industry = segs.slice(1).join(' ');
+    }
+  }
+  return { city, position, industry, salary };
+}
+
+/** 折叠 OCR 拼接出的重复片段：「本科一本科一3年」→「本科一3年」 */
+function collapseRepeats(text: string): string {
+  let out = text;
+  for (let i = 0; i < 3; i++) {
+    const next = out.replace(/([\u4e00-\u9fa5A-Za-z]{2,8})([一｜|])\1/g, '$1');
+    if (next === out) break;
+    out = next;
+  }
+  return out;
 }
 
 function isOrgHeadline(text: string, period: string): boolean {

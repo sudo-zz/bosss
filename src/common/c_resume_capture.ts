@@ -133,6 +133,25 @@ export async function closeCResumePanel(page: SafariPage): Promise<void> {
   }
 }
 
+/**
+ * 长简历滚到底后，画布可能只有轻微变化（阴影/滚动条），截图 hash 不同但内容重复。
+ * 这里按行文本重合度判断：某屏 80% 以上的行已出现过，就从该屏起截断。
+ */
+function trimRepeatedScreens(pages: OcrLine[][]): OcrLine[][] {
+  const key = (t: string) => t.replace(/[\s·•.,，。、|｜:：;；()（）\[\]【】]/g, '').toLowerCase();
+  const kept: OcrLine[][] = [];
+  const seen = new Set<string>();
+  for (const page of pages) {
+    const keys = page.map((l) => key(l.text)).filter((k) => k.length > 1);
+    if (keys.length === 0) continue;
+    const dup = keys.filter((k) => seen.has(k)).length;
+    if (kept.length > 0 && dup / keys.length > 0.8) break;
+    for (const k of keys) seen.add(k);
+    kept.push(page);
+  }
+  return kept.length > 0 ? kept : pages;
+}
+
 async function fileHash(path: string): Promise<string> {
   try {
     const buf = await readFile(path);
@@ -302,7 +321,7 @@ export async function extractOnlineResumeFromOpenIframe(
     if (shots.files.length > 0) {
       try {
         const pages = await ocrImages(shots.files);
-        const ocrPages = pages.map((p) => p.lines);
+        const ocrPages = trimRepeatedScreens(pages.map((p) => p.lines));
         const rawText = ocrLinesToText(ocrPages);
         structured = parseResumeOcrLines(ocrPages, { candidateName: opts.candidateLabel });
         // 原始 OCR 行有跨屏重复，落盘时改用结构化还原后的干净文本
