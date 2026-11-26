@@ -149,6 +149,15 @@ body {
   background: color-mix(in oklab, var(--foreground) 15%, transparent);
 }
 
+/* 候选人列表：Radix ScrollArea 的 Content 默认是 table + max-content，
+   窄栏时会把分数列顶到可视区外。这里让它按栏宽收缩，由中间信息区去换行/截断。 */
+.desk-list-scroll div[style*="display: table"] {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
 .no-scrollbar {
   scrollbar-width: none;
 }

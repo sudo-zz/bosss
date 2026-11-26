@@ -395,7 +395,7 @@ export function SourcePanel() {
             transition={{ duration: 0.14 }}
             className="h-full"
           >
-            <ScrollArea className="h-full">
+            <ScrollArea className="desk-list-scroll h-full">
               <div className="space-y-1.5 px-4 pb-4">
                 {list.length === 0 ? (
                   <Empty className="border border-dashed bg-card/70">
@@ -749,7 +749,7 @@ export function CandidateRow({
           <div className="truncate text-[11.5px] text-muted-foreground">{profileLine || '基础信息待补充'}</div>
         </div>
 
-        <div className="flex shrink-0 flex-col items-end justify-between self-stretch py-0.5">
+        <div className="flex min-w-[46px] shrink-0 flex-col items-end justify-between self-stretch py-0.5">
           <div
             className={cn(
               'text-[18px] leading-none font-semibold tracking-tight tabular-nums',

@@ -14,7 +14,8 @@ import { subscribeDataEvents } from '@/lib/api'
 import { filterCandidates, topEval, useDesk } from '@/store/desk'
 
 export function DeskPage() {
-  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  // 右侧浏览器分屏通常只有 700-900px：这个宽度也要用双栏，详情才不会以 Sheet 盖住列表分数列
+  const isDesktop = useMediaQuery('(min-width: 640px)')
   const {
     load,
     setLiveConnected,
