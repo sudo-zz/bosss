@@ -17,7 +17,7 @@ shortlist-report.md
 shortlist*.md
 web/pipeline.json
 web/data.js
-web/avatars/
+web/avatars
 web/assets
 web/pdfs
 

@@ -83,6 +83,8 @@ function ResumeViewerBody({
       .then((rec) => {
         if (!cancelled) {
           setOnlineRecord(rec)
+          // Canvas/图片简历没有可提取文本时，有截图就直接显示截图，避免打开后一片空白
+          setShowScreenshot(Boolean(rec.screenshotUrl) && !String(rec.text || '').trim())
           setOnlineLoading(false)
         }
       })
