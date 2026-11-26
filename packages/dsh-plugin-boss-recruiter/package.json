@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-boss-recruiter",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Boss Zhipin Safari-native AI recruiting assistant plugin for DeepSeek Harness — native boss_* tools, human-approved outreach, bundled recruiting SOP skill, and embedded web workbench.",
   "keywords": [
     "dsh-plugin",

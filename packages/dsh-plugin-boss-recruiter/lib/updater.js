@@ -243,6 +243,38 @@ export async function checkForUpdate(appRoot, overrides = {}) {
   }
 
   // 2. GitHub Releases 更新源
+  // 2a. 公开仓库优先直读 /releases/latest/download/latest.json（走 GitHub CDN，不消耗 REST API 60次/小时额度，免 403！）
+  if (!githubToken) {
+    const directManifestUrl = `https://github.com/${githubRepo}/releases/latest/download/latest.json`;
+    const directResp = await fetchJsonWithTimeout(directManifestUrl, { Accept: 'application/json' }).catch(() => null);
+    if (directResp?.ok && directResp.json?.version && directResp.json?.assetName) {
+      const m = directResp.json;
+      const latestVersion = String(m.version).replace(/^v/i, '');
+      const hasUpdate = compareVersions(latestVersion, status.currentVersion) > 0;
+      const releaseTag = latestVersion.startsWith('v') ? latestVersion : `v${latestVersion}`;
+      return {
+        ok: true,
+        channel: 'github-direct',
+        sourceLabel: `GitHub ${githubRepo}`,
+        releaseTag,
+        releaseUrl: `https://github.com/${githubRepo}/releases/tag/${releaseTag}`,
+        currentVersion: status.currentVersion,
+        latestVersion,
+        pluginVersion: m.pluginVersion || '',
+        hasUpdate,
+        publishedAt: m.publishedAt || '',
+        assetName: m.assetName,
+        downloadUrl: `https://github.com/${githubRepo}/releases/latest/download/${encodeURIComponent(m.assetName)}`,
+        sha256: String(m.sha256 || '').toLowerCase(),
+        size: Number(m.size || 0),
+        notes: String(m.notes || ''),
+        canSelfUpdate: status.canSelfUpdate,
+        isDevRepo: status.isDevRepo,
+      };
+    }
+  }
+
+  // 2b. 回退到 GitHub REST API（私有仓库 Token / 本机 gh CLI / 未包含 latest.json 的旧 Release）
   const apiUrl = `https://api.github.com/repos/${githubRepo}/releases/latest`;
   let release = null;
   let authMode = 'public';

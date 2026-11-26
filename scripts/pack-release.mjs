@@ -193,7 +193,8 @@ echo "✓ 本地数据目录已就绪：\${HOME}/.boss-cli（全新安装初始�
 LAUNCHER_CMD="\${INSTALL_ROOT}/启动招聘助手.command"
 cat > "\${LAUNCHER_CMD}" <<'EOF_LAUNCHER'
 #!/usr/bin/env bash
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+INSTALL_ROOT="\${BOSS_RECRUITER_HOME:-\$HOME/.boss-recruiter}"
+export PATH="\$INSTALL_ROOT/node/bin:\$INSTALL_ROOT/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:\$HOME/.local/bin:\$PATH"
 exec boss-dsh
 EOF_LAUNCHER
 chmod +x "\${LAUNCHER_CMD}"

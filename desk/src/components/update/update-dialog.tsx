@@ -223,7 +223,7 @@ function UpdateDialogBody() {
           )}
         </DialogTitle>
         <DialogDescription className="text-[12px]">
-          检查并拉取最新安装包完成替换，仅更新程序本身。
+          默认直连 GitHub Releases（{status?.config.githubRepo || 'sudo-zz/bosss'}）检查并拉取最新安装包，仅更新程序本身。
         </DialogDescription>
       </DialogHeader>
 

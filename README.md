@@ -1,4 +1,23 @@
-# boss-cli（macOS Safari 招聘筛选定制版）
+# 招聘助手 × boss-cli（macOS Safari + DeepSeek Harness）
+
+面向 macOS 真实 Safari 的 AI 招聘筛选与候选人管理工作台，支持 **内嵌 PDF 简历查看器**、**Boss 在线简历本地存档**、**消息列表 / 推荐牛人 / 精选牛人多来源筛选** 与 **一键检查更新**。
+
+## 新电脑一键安装（macOS，零编译）
+
+打开新 Mac 的「终端」，粘贴执行这一条命令即可（自动处理 Node.js 22、`dsh`、`boss`、`boss-dsh` 与桌面启动图标，新机器初始数据为空，不覆盖原生 `dsh`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sudo-zz/bosss/main/install.sh | bash
+```
+
+安装完成后：
+1. Safari → **设置 → 高级** → 勾选「显示网页开发者功能」；顶部菜单 **开发** → 勾选「允许来自 Apple 事件的 JavaScript」。
+2. 在 Safari 手动登录 https://www.zhipin.com/web/chat/index 。
+3. 双击桌面的 **「启动招聘助手.command」**（或在终端运行 `boss-dsh`），在 DSH 设置中接入你的大模型，打开 `/boss-desk/` 即可使用；后续点页面右上角 **「检查更新」** 即可直连 GitHub 一键更新且保留全部简历与台账。
+
+---
+
+## 核心特性
 
 基于 `joohw/boss-cli` 深度改造，专为 **macOS 真实 Safari + AI Agent 招聘筛选协作** 优化：
 

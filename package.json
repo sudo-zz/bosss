@@ -1,6 +1,6 @@
 {
   "name": "@joohw/boss-cli",
-  "version": "0.8.1-dsh",
+  "version": "0.8.2-dsh",
   "description": "Boss直聘招聘助手（macOS Safari 驱动 + DeepSeek Harness 插件与独立工作台）",
   "keywords": [
     "boss",
