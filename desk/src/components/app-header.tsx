@@ -24,28 +24,36 @@ export function AppHeader() {
     toggleTheme,
   } = useDesk()
   const [updateOpen, setUpdateOpen] = useState(false)
+  const [reloading, setReloading] = useState(false)
+
+  /** 整页重载：同时拿到最新界面与最新台账数据，给人一个明确的“刷新”入口 */
+  const hardReload = () => {
+    if (reloading) return
+    setReloading(true)
+    window.setTimeout(() => window.location.reload(), 120)
+  }
 
   return (
-    <header className="flex h-13 shrink-0 items-center gap-2.5 border-b bg-background/95 px-4 backdrop-blur-xs">
-      <div className="flex items-center gap-2.5">
+    <header className="flex h-13 shrink-0 items-center gap-1.5 border-b bg-background/95 px-3 backdrop-blur-xs sm:gap-2.5 sm:px-4">
+      <div className="flex shrink-0 items-center gap-2.5">
         <div className="flex size-7 items-center justify-center rounded-lg bg-foreground text-[12px] font-semibold text-background shadow-xs">
           招
         </div>
-        <div className="hidden leading-tight sm:block">
-          <div className="text-[13.5px] font-semibold tracking-tight">招聘助手</div>
-          <div className="hidden text-[10px] text-muted-foreground lg:block">本地候选人展示看板</div>
+        <div className="hidden leading-tight lg:block">
+          <div className="text-[13.5px] font-semibold tracking-tight whitespace-nowrap">招聘助手</div>
+          <div className="hidden text-[10px] text-muted-foreground xl:block">本地候选人展示看板</div>
         </div>
       </div>
 
-      <Tabs value={module} onValueChange={(value) => setModule(value as 'source' | 'assess')} className="ml-1.5">
+      <Tabs value={module} onValueChange={(value) => setModule(value as 'source' | 'assess')} className="ml-0.5 shrink-0 sm:ml-1.5">
         <TabsList className="h-8 bg-muted/70 p-0.5">
-          <TabsTrigger value="source" className="gap-1.5 px-3 text-[12.5px] data-[state=active]:shadow-2xs">
+          <TabsTrigger value="source" className="gap-1.5 px-2.5 text-[12.5px] whitespace-nowrap data-[state=active]:shadow-2xs sm:px-3">
             简历筛选
             <span className="rounded bg-foreground/7 px-1 py-0.2 text-[10px] text-muted-foreground tabular-nums">
               {pipeline?.stats.total ?? 0}
             </span>
           </TabsTrigger>
-          <TabsTrigger value="assess" className="gap-1.5 px-3 text-[12.5px] data-[state=active]:shadow-2xs">
+          <TabsTrigger value="assess" className="gap-1.5 px-2.5 text-[12.5px] whitespace-nowrap data-[state=active]:shadow-2xs sm:px-3">
             面试评估
             <span className="rounded bg-foreground/7 px-1 py-0.2 text-[10px] text-muted-foreground tabular-nums">
               {evalData?.candidates.length ?? 0}
@@ -54,7 +62,7 @@ export function AppHeader() {
         </TabsList>
       </Tabs>
 
-      <div className="relative ml-auto w-[220px] max-w-[38vw] lg:w-[280px]">
+      <div className="relative ml-auto w-[180px] min-w-0 shrink sm:w-[220px] lg:w-[280px] max-w-[38vw]">
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           id="desk-global-search"
@@ -86,7 +94,7 @@ export function AppHeader() {
             onClick={() => void refresh()}
             disabled={refreshing}
             className={cn(
-              'hidden h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors md:inline-flex',
+              'hidden h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium whitespace-nowrap transition-colors lg:inline-flex',
               liveConnected
                 ? 'border-emerald-500/25 bg-emerald-500/8 text-emerald-700 hover:bg-emerald-500/12 dark:text-emerald-300'
                 : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70',
@@ -115,7 +123,7 @@ export function AppHeader() {
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-sm" onClick={() => setUpdateOpen(true)} aria-label="检查更新">
+          <Button variant="ghost" size="icon-sm" onClick={() => setUpdateOpen(true)} aria-label="检查更新" className="hidden shrink-0 lg:inline-flex">
             <ArrowDownToLine className="size-3.5" />
           </Button>
         </TooltipTrigger>
@@ -134,16 +142,18 @@ export function AppHeader() {
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => void refresh()}
-            disabled={refreshing}
-            aria-label="重新读取本地数据"
+            variant="outline"
+            size="sm"
+            onClick={hardReload}
+            disabled={reloading}
+            aria-label="刷新页面"
+            className="h-7 shrink-0 gap-1 px-2 text-[11.5px] whitespace-nowrap"
           >
-            <RefreshCw className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'} />
+            <RefreshCw className={cn('size-3.5', reloading && 'animate-spin')} />
+            <span>刷新</span>
           </Button>
         </TooltipTrigger>
-        <TooltipContent>立即重新读取本地数据</TooltipContent>
+        <TooltipContent>重新加载页面（⌘R）：显示最新界面与最新台账数据</TooltipContent>
       </Tooltip>
 
       <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />

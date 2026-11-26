@@ -480,7 +480,7 @@ export function SourcePanel() {
           disabled={refreshing}
         >
           <RefreshCw className={refreshing ? 'size-3 animate-spin' : 'size-3'} />
-          {refreshing ? '读取中' : '重新读取'}
+          {refreshing ? '读取中' : '刷新数据'}
         </Button>
       </div>
     </div>
