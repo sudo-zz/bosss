@@ -1,14 +1,11 @@
 /**
- * 招聘助手安全自更新模块（零数据影响）
+ * 招聘助手安全自更新模块（零数据影响 · 纯 Node 零外部依赖）
  *
  * 原则：
- *   - 仅替换程序目录（~/.boss-recruiter/app），绝对不触碰 ~/.boss-cli/（简历 PDF、在线简历、台账、头像、配额）与 ~/.dsh/（模型凭证与对话）
+ *   - 仅原子替换程序目录（~/.boss-recruiter/app），绝对不触碰 ~/.boss-cli/（简历 PDF、在线简历、台账、评估、头像）
  *   - 绝不覆盖开发者本地 Git 源码仓库（检测到 .git 时默认阻止覆盖源码）
- *   - 支持 3 种更新来源：
- *       1. 局域网更新服务（`npm run release:serve` 提供的 http://<IP>:8788）
- *       2. GitHub Releases（默认 sudo-zz/bosss；支持本机 gh 登录态或只读 Token）
- *       3. 离线压缩包（上传/传入 boss-recruiter-v*-darwin.tar.gz）
- *   - 原子目录切换 + 失败自动回滚 + SHA-256 校验
+ *   - 默认优先直连 GitHub Releases CDN（/releases/latest/download/latest.json，免 403 限流、零配置）
+ *   - 同步支持局域网更新服务（npm run release:serve）、GitHub Token 与离线 .tar.gz 压缩包
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -16,15 +13,12 @@ import {
   chmodSync,
   cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
   renameSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -94,15 +88,12 @@ export function maskConfig(cfg) {
 
 export function readAppVersionInfo(appRoot) {
   const rootPkg = safeReadJson(path.join(appRoot, 'package.json')) || {};
-  const pluginPkg =
-    safeReadJson(path.join(appRoot, 'packages', 'dsh-plugin-boss-recruiter', 'package.json')) || {};
   return {
     currentVersion: String(rootPkg.version || '0.0.0').replace(/^v/i, ''),
-    pluginVersion: String(pluginPkg.version || '0.0.0').replace(/^v/i, ''),
   };
 }
 
-/** 比较版本字符串（如 0.8.0-dsh vs 0.8.1-dsh）。返回 1 表示 a > b，-1 表示 a < b，0 表示相等。 */
+/** 比较版本字符串（如 0.9.0 vs 0.9.1）。返回 1 表示 a > b，-1 表示 a < b，0 表示相等。 */
 export function compareVersions(aRaw, bRaw) {
   const parse = (raw) => {
     const clean = String(raw || '').trim().replace(/^v/i, '');
@@ -116,19 +107,21 @@ export function compareVersions(aRaw, bRaw) {
     if (a.nums[i] !== b.nums[i]) return a.nums[i] > b.nums[i] ? 1 : -1;
   }
   if (a.pre === b.pre) return 0;
+  // 正式版（无 pre-release 后缀）高于同版本号的预发布版（如 0.9.0 > 0.9.0-rc1）
+  if (!a.pre && b.pre) return 1;
+  if (a.pre && !b.pre) return -1;
   return a.pre.localeCompare(b.pre) > 0 ? 1 : -1;
 }
 
 export function getUpdateStatus(appRoot) {
   const { installAppDir, bossHome } = getUpdaterPaths();
-  const { currentVersion, pluginVersion } = readAppVersionInfo(appRoot);
+  const { currentVersion } = readAppVersionInfo(appRoot);
   const isDevRepo = existsSync(path.join(appRoot, '.git'));
   const isInstalledBundle = path.resolve(appRoot) === path.resolve(installAppDir);
   const cfg = readUpdateConfig();
 
   return {
     currentVersion,
-    pluginVersion,
     appRoot,
     installAppDir,
     dataDir: bossHome,
@@ -199,7 +192,7 @@ export async function checkForUpdate(appRoot, overrides = {}) {
     overrides.githubToken ?? saved.githubToken ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? '',
   ).trim();
 
-  // 1. 局域网 / 自定义 HTTP 更新源（推荐：人事电脑零 GitHub 登录）
+  // 1. 自定义/局域网更新源
   if (sourceUrl) {
     const manifestUrl = sourceUrl.endsWith('.json')
       ? sourceUrl
@@ -216,7 +209,7 @@ export async function checkForUpdate(appRoot, overrides = {}) {
     const m = resp.json;
     const latestVersion = String(m.version || '').replace(/^v/i, '');
     if (!latestVersion || !m.assetName) {
-      throw new Error(`更新清单 latest.json 格式不完整（缺少 version 或 assetName）`);
+      throw new Error('更新清单 latest.json 格式不完整（缺少 version 或 assetName）');
     }
     const baseDir = manifestUrl.slice(0, manifestUrl.lastIndexOf('/') + 1);
     const downloadUrl = m.downloadUrl
@@ -229,7 +222,6 @@ export async function checkForUpdate(appRoot, overrides = {}) {
       sourceLabel: manifestUrl,
       currentVersion: status.currentVersion,
       latestVersion,
-      pluginVersion: m.pluginVersion || '',
       hasUpdate,
       publishedAt: m.publishedAt || '',
       assetName: m.assetName,
@@ -242,8 +234,7 @@ export async function checkForUpdate(appRoot, overrides = {}) {
     };
   }
 
-  // 2. GitHub Releases 更新源
-  // 2a. 公开仓库优先直读 /releases/latest/download/latest.json（走 GitHub CDN，不消耗 REST API 60次/小时额度，免 403！）
+  // 2a. GitHub Releases CDN 直读（不消耗 API 60次/小时额度，免 403）
   if (!githubToken) {
     const directManifestUrl = `https://github.com/${githubRepo}/releases/latest/download/latest.json`;
     const directResp = await fetchJsonWithTimeout(directManifestUrl, { Accept: 'application/json' }).catch(() => null);
@@ -260,7 +251,6 @@ export async function checkForUpdate(appRoot, overrides = {}) {
         releaseUrl: `https://github.com/${githubRepo}/releases/tag/${releaseTag}`,
         currentVersion: status.currentVersion,
         latestVersion,
-        pluginVersion: m.pluginVersion || '',
         hasUpdate,
         publishedAt: m.publishedAt || '',
         assetName: m.assetName,
@@ -274,7 +264,7 @@ export async function checkForUpdate(appRoot, overrides = {}) {
     }
   }
 
-  // 2b. 回退到 GitHub REST API（私有仓库 Token / 本机 gh CLI / 未包含 latest.json 的旧 Release）
+  // 2b. 回退到 GitHub REST API（私有仓库 Token / gh）
   const apiUrl = `https://api.github.com/repos/${githubRepo}/releases/latest`;
   let release = null;
   let authMode = 'public';
@@ -291,7 +281,6 @@ export async function checkForUpdate(appRoot, overrides = {}) {
       throw new Error(`GitHub Release 检查失败（HTTP ${resp.status}），请确认 Token 拥有 repo 读取权限。`);
     }
   } else {
-    // 先试公开访问，若私有仓库返回 404/401/403，再尝试本机 gh CLI
     const resp = await fetchJsonWithTimeout(apiUrl, { Accept: 'application/vnd.github+json' }).catch(() => ({
       ok: false,
       status: 0,
@@ -307,7 +296,7 @@ export async function checkForUpdate(appRoot, overrides = {}) {
         authMode = 'gh';
       } else {
         const err = new Error(
-          `仓库 ${githubRepo} 为私有仓库或当前无法直连 GitHub。请在下方填入「局域网更新地址」（如开发机运行 npm run release:serve 后的地址）或 GitHub Token，也可直接拖入新版 .tar.gz 安装包离线更新。`,
+          `暂时无法连接 GitHub（${githubRepo}）。请检查网络，或在「更新源设置」填入局域网地址 / 直接上传新版 .tar.gz 离线更新。`,
         );
         err.needAuth = true;
         throw err;
@@ -322,7 +311,6 @@ export async function checkForUpdate(appRoot, overrides = {}) {
     throw new Error(`GitHub Release ${release.tag_name || ''} 中未找到 macOS 安装包（boss-recruiter-v*-darwin.tar.gz）`);
   }
 
-  // 尝试读取 SHA256SUMS.txt
   let expectedSha256 = '';
   const digest = String(bundleAsset.digest || '');
   if (digest.startsWith('sha256:')) {
@@ -377,15 +365,15 @@ function assertValidBundleApp(appDir) {
     'package.json',
     'dist/cli/index.js',
     'desk/dist/index.html',
-    'scripts/dsh-web.mjs',
-    'packages/dsh-plugin-boss-recruiter/package.json',
+    'desk/server/index.mjs',
+    'scripts/boss-desk.mjs',
+    'scripts/updater.mjs',
   ];
   for (const rel of required) {
     if (!existsSync(path.join(appDir, rel))) {
       throw new Error(`更新包结构不完整，缺少必要文件：${rel}`);
     }
   }
-  // 防御检查：禁止更新包携带候选人隐私或覆盖用户数据目录
   for (const forbidden of ['web/pipeline.json', 'data/tracker.json']) {
     if (existsSync(path.join(appDir, forbidden))) {
       throw new Error(`更新包异常包含不应打包的数据文件：${forbidden}`);
@@ -393,39 +381,29 @@ function assertValidBundleApp(appDir) {
   }
 }
 
-function refreshInstalledLinks(installAppDir) {
-  const dshHome = process.env.DSH_HOME?.trim() || path.join(homedir(), '.dsh');
-  const pluginDir = path.join(installAppDir, 'packages', 'dsh-plugin-boss-recruiter');
-  const profileDir = path.join(dshHome, 'profiles', 'boss-web');
-  const pkgPath = path.join(profileDir, 'package.json');
-
-  if (existsSync(pkgPath)) {
+function syncBundledSkillToAgents(installAppDir) {
+  const skillSrc = path.join(installAppDir, 'skills', 'boss-safari-recruiter');
+  if (!existsSync(skillSrc)) return;
+  const home = homedir();
+  const candidates = [
+    path.join(home, '.workbuddy', 'skills'),
+    path.join(home, '.claude', 'skills'),
+    path.join(home, '.codex', 'skills'),
+    path.join(home, '.gemini', 'config', 'skills'),
+    path.join(home, '.openclaw', 'skills'),
+    path.join(home, '.agents', 'skills'),
+  ];
+  for (const dir of candidates) {
+    // 仅更新已存在对应 Agent 根目录的 skills 目录，不无故创建无关目录
+    const parent = path.dirname(dir);
+    if (!existsSync(parent)) continue;
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-      pkg.dependencies = pkg.dependencies || {};
-      pkg.dependencies['dsh-plugin-boss-recruiter'] = `link:${pluginDir}`;
-      pkg.dsh = pkg.dsh || {};
-      pkg.dsh.profile = pkg.dsh.profile || {};
-      pkg.dsh.profile.bundles = Array.isArray(pkg.dsh.profile.bundles) ? pkg.dsh.profile.bundles : [];
-      if (!pkg.dsh.profile.bundles.includes('dsh-plugin-boss-recruiter')) {
-        pkg.dsh.profile.bundles.push('dsh-plugin-boss-recruiter');
-      }
-      writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
-
-      const nodeModulesDir = path.join(profileDir, 'node_modules');
-      mkdirSync(nodeModulesDir, { recursive: true });
-      const linkPath = path.join(nodeModulesDir, 'dsh-plugin-boss-recruiter');
-      try {
-        const st = lstatSync(linkPath);
-        if (!st.isSymbolicLink() || path.resolve(path.dirname(linkPath), readlinkSync(linkPath)) !== pluginDir) {
-          rmSync(linkPath, { recursive: true, force: true });
-          symlinkSync(pluginDir, linkPath, 'dir');
-        }
-      } catch {
-        symlinkSync(pluginDir, linkPath, 'dir');
-      }
+      mkdirSync(dir, { recursive: true });
+      const dest = path.join(dir, 'boss-safari-recruiter');
+      rmSync(dest, { recursive: true, force: true });
+      cpSync(skillSrc, dest, { recursive: true });
     } catch {
-      /* 忽略 profile 刷新非致命错误，下次 boss-dsh 启动时也会自动修复 */
+      /* 非致命 */
     }
   }
 }
@@ -436,7 +414,7 @@ export function installUpdateFromTarball(tarballPath, options = {}) {
 
   if (appRoot && existsSync(path.join(appRoot, '.git')) && !allowDevOverride) {
     throw new Error(
-      '当前运行在本地 Git 源码开发目录，为保护你的开发代码不会执行自覆盖更新；在人事电脑安装的发行版中点击即可自动替换 ~/.boss-recruiter/app。',
+      '当前运行在本地 Git 源码开发目录，为保护你的开发代码不会执行自覆盖更新；在已安装的发行版目录 ~/.boss-recruiter/app 中点击即可一键替换。',
     );
   }
 
@@ -469,13 +447,13 @@ export function installUpdateFromTarball(tarballPath, options = {}) {
     assertValidBundleApp(extractedApp);
     const nextInfo = readAppVersionInfo(extractedApp);
 
-    // 原子替换 ~/.boss-recruiter/app（绝不触碰 ~/.boss-cli/ 与 ~/.dsh/）
+    // 原子替换 ~/.boss-recruiter/app（绝不触碰 ~/.boss-cli/ 中的简历与台账）
     mkdirSync(installRoot, { recursive: true });
     const stagingApp = path.join(installRoot, `app.new.${Date.now()}`);
     const backupApp = path.join(installRoot, `app.bak.${Date.now()}`);
     cpSync(extractedApp, stagingApp, { recursive: true });
     chmodSync(path.join(stagingApp, 'dist', 'cli', 'index.js'), 0o755);
-    chmodSync(path.join(stagingApp, 'scripts', 'dsh-web.mjs'), 0o755);
+    chmodSync(path.join(stagingApp, 'scripts', 'boss-desk.mjs'), 0o755);
 
     let movedOld = false;
     try {
@@ -495,13 +473,12 @@ export function installUpdateFromTarball(tarballPath, options = {}) {
       throw new Error(`替换程序目录失败（已自动回滚旧版本）：${swapError?.message || swapError}`);
     }
 
-    refreshInstalledLinks(installAppDir);
+    syncBundledSkillToAgents(installAppDir);
 
     return {
       ok: true,
       previousVersion: prevVersion,
       updatedVersion: nextInfo.currentVersion,
-      pluginVersion: nextInfo.pluginVersion,
       installAppDir,
       dataPreserved: true,
       restartRequired: true,
@@ -573,7 +550,6 @@ export function installUpdateFromBase64(appRoot, { filename = 'update.tar.gz', d
   if (buf.length > 35 * 1024 * 1024) {
     throw new Error('安装包超过 35MB 大小限制');
   }
-  // gzip magic header: 0x1f 0x8b
   if (buf[0] !== 0x1f || buf[1] !== 0x8b) {
     throw new Error('请上传有效的 .tar.gz 安装包（gzip 格式）');
   }

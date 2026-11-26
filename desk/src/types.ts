@@ -181,39 +181,6 @@ export type Quota = {
   quotas?: Record<string, { used: number; limit: number }>
 }
 
-export type DoctorStatus = {
-  ok: boolean
-  runtime?: 'deepseek-harness' | 'standalone'
-  safariRunning?: boolean
-  jsAppleEventsEnabled?: boolean
-  loggedInShell?: boolean
-  tabTitle?: string
-  message?: string
-  modelMode?: 'llm' | 'local'
-  provider?: string
-  modelId?: string
-  modelName?: string
-  checkedAt?: string
-}
-
-export type DshModelSelection = {
-  provider: string
-  model: string
-  reasoningEffort?: string
-}
-
-export type DshProviderCatalog = {
-  id: string
-  name: string
-  models: { id: string; name: string; description?: string }[]
-}
-
-export type DshModelsCatalog = {
-  runtime: 'deepseek-harness' | 'standalone'
-  current: DshModelSelection | null
-  providers: DshProviderCatalog[]
-}
-
 export type DeskData = {
   pipeline: Pipeline
   evalData: EvalData
@@ -222,7 +189,6 @@ export type DeskData = {
 
 export type UpdateStatus = {
   currentVersion: string
-  pluginVersion: string
   appRoot: string
   installAppDir: string
   dataDir: string
@@ -260,7 +226,6 @@ export type UpdateInstallResult = {
   ok: boolean
   previousVersion: string
   updatedVersion: string
-  pluginVersion?: string
   installAppDir: string
   dataPreserved: boolean
   restartRequired: boolean

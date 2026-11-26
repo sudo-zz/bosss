@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 招聘助手 × DeepSeek Harness — macOS 一键在线安装脚本
+# 招聘助手（boss + boss-desk）— macOS 一键在线安装脚本（零 DSH、零编译、免 sudo）
 #
 # 用法（在任意新 Mac 终端直接粘贴执行）：
 #   curl -fsSL https://raw.githubusercontent.com/sudo-zz/bosss/main/install.sh | bash
 #
 # 特性：
-#   - 零编译、零 sudo（缺 Node.js >= 22 自动在用户目录安装官方 Node 22 LTS）
-#   - 自动安装 DeepSeek Harness（dsh），独立注册 boss / boss-dsh，绝不覆盖原生 dsh
-#   - 从 GitHub Releases 直连拉取最新安装包并校验 SHA-256
+#   - 零 DSH、零模型配置、零编译、免 sudo（缺 Node.js >= 22 自动在用户目录准备官方 Node 22 LTS）
+#   - 从 GitHub Releases CDN 直连拉取最新安装包并校验 SHA-256
+#   - 注册独立全局命令 boss（Safari Boss 能力包）与 boss-desk（本地只读展示工作台）
+#   - 自动同步 boss-safari-recruiter Skill 到本机已安装的 WorkBuddy / Claude / Codex / OpenClaw 等 Agent
+#   - 自动在桌面生成「启动招聘助手.command」双击图标
 #   - 新电脑初始化数据为空；重复执行可用于升级，绝不改动已有 ~/.boss-cli 简历与台账数据
 
 REPO="${BOSS_GITHUB_REPO:-sudo-zz/bosss}"
@@ -23,12 +25,11 @@ fi
 
 echo ""
 echo "============================================================"
-echo "  招聘助手 × DeepSeek Harness — macOS 一键安装"
+echo "  招聘助手（boss + boss-desk）— macOS 一键安装"
 echo "============================================================"
 echo ""
 
-# 把可能已存在的本机常用 PATH 纳入检测
-export PATH="$INSTALL_ROOT/node/bin:$INSTALL_ROOT/npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="$INSTALL_ROOT/node/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 # 1. 检测或自动准备 Node.js >= 22（免 sudo，免 Homebrew）
 ensure_node() {
@@ -39,7 +40,7 @@ ensure_node() {
       echo "✓ 检测到 Node.js $(node -v) ($(command -v node))"
       return 0
     fi
-    echo "▸ 当前系统 Node.js 为 $(node -v)（低于 v22），将自动为招聘助手准备独立 Node 22 运行时（不影响系统 Node）..."
+    echo "▸ 当前系统 Node.js 为 $(node -v)（低于 v22），将自动准备独立 Node 22 运行时（不影响系统 Node）..."
   else
     echo "▸ 未检测到 Node.js，将自动下载官方 Node.js 22 LTS 到 $INSTALL_ROOT/node（免 sudo）..."
   fi
@@ -83,38 +84,7 @@ ensure_node() {
 
 ensure_node
 
-# 2. 检测或安装 DeepSeek Harness (dsh)（免 sudo）
-ensure_dsh() {
-  if command -v dsh >/dev/null 2>&1; then
-    echo "✓ 检测到 DeepSeek Harness $(dsh --version 2>/dev/null || echo '') ($(command -v dsh))"
-    return 0
-  fi
-
-  echo "▸ 未检测到 dsh，正在安装官方 @deepseek-ai/dsh ..."
-  local npm_prefix
-  npm_prefix="$(npm prefix -g 2>/dev/null || true)"
-  local prefix_args=()
-  if [[ -z "$npm_prefix" || ! -w "$npm_prefix" || ( -d "$npm_prefix/lib" && ! -w "$npm_prefix/lib" ) ]]; then
-    mkdir -p "$INSTALL_ROOT/npm-global"
-    prefix_args=(--prefix "$INSTALL_ROOT/npm-global")
-    export PATH="$INSTALL_ROOT/npm-global/bin:$PATH"
-  fi
-
-  if ! npm install -g "${prefix_args[@]}" @deepseek-ai/dsh; then
-    echo "▸ 默认 npm 源安装较慢或失败，切换国内镜像重试..."
-    npm install -g "${prefix_args[@]}" --registry=https://registry.npmmirror.com @deepseek-ai/dsh
-  fi
-
-  if ! command -v dsh >/dev/null 2>&1; then
-    echo "❌ 安装 @deepseek-ai/dsh 后仍未找到 dsh 命令，请检查网络或 PATH。"
-    exit 1
-  fi
-  echo "✓ DeepSeek Harness 安装完成：$(dsh --version 2>/dev/null || echo dsh)"
-}
-
-ensure_dsh
-
-# 3. 从 GitHub Releases CDN 获取最新版本清单（不走 REST API，免 403 限流）
+# 2. 从 GitHub Releases CDN 获取最新版本清单（不走 REST API，免 403 限流）
 TMP_WORK="$(mktemp -d "${TMPDIR:-/tmp}/boss-recruiter-install.XXXXXX")"
 trap 'rm -rf "$TMP_WORK"' EXIT
 
@@ -139,7 +109,7 @@ ASSET_URL="https://github.com/${REPO}/releases/latest/download/${ASSET_NAME}"
 echo "▸ 正在下载招聘助手 v${VERSION} (${ASSET_NAME})..."
 curl -fL --progress-bar --connect-timeout 15 --max-time 180 "$ASSET_URL" -o "$TMP_WORK/$ASSET_NAME"
 
-# 4. 校验 SHA-256
+# 3. 校验 SHA-256
 if [[ -n "$EXPECTED_SHA" ]]; then
   ACTUAL_SHA="$(shasum -a 256 "$TMP_WORK/$ASSET_NAME" | awk '{print tolower($1)}')"
   if [[ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]]; then
@@ -151,7 +121,7 @@ if [[ -n "$EXPECTED_SHA" ]]; then
   echo "✓ SHA-256 校验通过 (${ACTUAL_SHA:0:12}...)"
 fi
 
-# 5. 解压并运行包内安装程序
+# 4. 解压并运行包内安装程序
 echo "▸ 正在解压并安装..."
 tar -xzf "$TMP_WORK/$ASSET_NAME" -C "$TMP_WORK"
 BUNDLE_DIR="$(find "$TMP_WORK" -maxdepth 2 -name install.sh -exec dirname {} \; | head -n 1)"
@@ -160,11 +130,11 @@ if [[ -z "$BUNDLE_DIR" || ! -f "$BUNDLE_DIR/install.sh" ]]; then
   exit 1
 fi
 
-bash "$BUNDLE_DIR/install.sh" --skip-dsh
+bash "$BUNDLE_DIR/install.sh"
 
-# 6. 确保内置 Node / npm-global PATH 写入 ~/.zshrc（如需要）并在桌面生成双击图标
+# 5. 确保内置 Node / ~/.local/bin 路径写入 ~/.zshrc（如存在）
 NEED_SHELL_PATH=""
-for d in "$INSTALL_ROOT/node/bin" "$INSTALL_ROOT/npm-global/bin" "$HOME/.local/bin"; do
+for d in "$INSTALL_ROOT/node/bin" "$HOME/.local/bin"; do
   if [[ -d "$d" ]]; then
     NEED_SHELL_PATH="${NEED_SHELL_PATH:+$NEED_SHELL_PATH:}$d"
   fi
@@ -182,7 +152,7 @@ if [[ -n "$NEED_SHELL_PATH" ]]; then
   fi
 fi
 
-# 在桌面创建「启动招聘助手.command」（若桌面可写且尚未创建）
+# 6. 在桌面创建「启动招聘助手.command」双击图标
 LAUNCHER_SRC="$INSTALL_ROOT/启动招聘助手.command"
 DESKTOP_LAUNCHER="$HOME/Desktop/启动招聘助手.command"
 if [[ -f "$LAUNCHER_SRC" && -d "$HOME/Desktop" && -w "$HOME/Desktop" ]]; then
@@ -192,5 +162,7 @@ if [[ -f "$LAUNCHER_SRC" && -d "$HOME/Desktop" && -w "$HOME/Desktop" ]]; then
 fi
 
 echo ""
-echo "🎉 全部安装完成！后续在页面右上角点「检查更新」即可直连 GitHub 一键升级（不影响简历与台账数据）。"
+echo "🎉 安装完成！"
+echo "   - 双击桌面「启动招聘助手.command」或在终端执行 boss-desk，浏览器打开 http://127.0.0.1:7788"
+echo "   - 在 WorkBuddy / 千问办公 / 豆包工作 左侧对话里直接指挥 Agent 操作 Boss 直聘与整理本地简历即可"
 echo ""

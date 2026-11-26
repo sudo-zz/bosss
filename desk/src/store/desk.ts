@@ -5,8 +5,6 @@ import type {
   Candidate,
   CandidateSource,
   DeskData,
-  DoctorStatus,
-  DshModelsCatalog,
   EvalCandidate,
   EvalData,
   Pipeline,
@@ -50,13 +48,9 @@ type DeskState = {
   pipeline: Pipeline | null
   evalData: EvalData | null
   quota: Quota | null
-  doctor: DoctorStatus | null
-  modelsCatalog: DshModelsCatalog | null
-  checkingDoctor: boolean
-  loadingModels: boolean
   loading: boolean
   refreshing: boolean
-  syncingSourcing: boolean
+  liveConnected: boolean
   error: string | null
   loadedAt: number
 
@@ -71,23 +65,11 @@ type DeskState = {
   sort: SortKey
   selectedId: string | null
   selectedEvalId: string | null
-  assistantOpen: boolean
   detailOpen: boolean
-  sendDialogOpen: boolean
 
-  load: (force?: boolean) => Promise<void>
-  checkDoctor: (force?: boolean) => Promise<void>
-  loadModels: () => Promise<void>
-  selectModel: (provider: string, model: string) => Promise<void>
+  load: (silent?: boolean) => Promise<void>
   refresh: () => Promise<void>
-  syncSourcing: (payload: {
-    tab: 'recommend' | 'featured'
-    job?: string
-    limit?: number
-    skipViewed?: boolean
-    skipColleague?: boolean
-  }) => Promise<{ count: number; job: string; tab: 'recommend' | 'featured' }>
-  applyPipelinePatch: (pipeline?: Pipeline | null, quota?: Quota | null) => void
+  setLiveConnected: (connected: boolean) => void
   toggleTheme: () => void
   setModule: (module: ModuleKey) => void
   setSourceView: (view: SourceView) => void
@@ -101,11 +83,6 @@ type DeskState = {
   select: (id: string | null) => void
   selectEval: (id: string | null) => void
   closeDetail: () => void
-  toggleAssistant: (open?: boolean) => void
-  setSendDialogOpen: (open: boolean) => void
-  moveStage: (candidate: Candidate, stage: Stage) => Promise<Stage>
-  sendMessage: (candidate: Candidate, text: string) => Promise<void>
-  greetCandidate: (candidate: Candidate) => Promise<void>
 }
 
 const initialTheme = readInitialTheme()
@@ -115,13 +92,9 @@ export const useDesk = create<DeskState>((set) => ({
   pipeline: null,
   evalData: null,
   quota: null,
-  doctor: null,
-  modelsCatalog: null,
-  checkingDoctor: false,
-  loadingModels: false,
   loading: false,
   refreshing: false,
-  syncingSourcing: false,
+  liveConnected: false,
   error: null,
   loadedAt: 0,
 
@@ -136,118 +109,64 @@ export const useDesk = create<DeskState>((set) => ({
   sort: 'score',
   selectedId: null,
   selectedEvalId: null,
-  assistantOpen: typeof window !== 'undefined' ? window.innerWidth >= 1360 : true,
   detailOpen: false,
-  sendDialogOpen: false,
 
-  load: async (force = false) => {
-    set({ loading: true, error: null })
+  load: async (silent = false) => {
+    if (!silent) set({ loading: true, error: null })
     try {
-      const data = (await api.data(force)) as DeskData
+      const data = (await api.data()) as DeskData
       set((state) => {
         const sorted = [...data.pipeline.candidates].sort(sortCandidates(state.sort))
+        const keepSelected =
+          state.selectedId && data.pipeline.candidates.some((c) => c.id === state.selectedId)
+            ? state.selectedId
+            : sorted[0]?.id ?? null
+        const keepEval =
+          state.selectedEvalId && data.evalData.candidates.some((c) => c.id === state.selectedEvalId)
+            ? state.selectedEvalId
+            : [...data.evalData.candidates].sort((a, b) => (b.composite ?? b.score) - (a.composite ?? a.score))[0]?.id ??
+              null
         return {
           pipeline: data.pipeline,
           evalData: data.evalData,
           quota: data.quota,
           loading: false,
+          refreshing: false,
+          error: null,
           loadedAt: Date.now(),
-          selectedId: state.selectedId ?? sorted[0]?.id ?? null,
-          selectedEvalId:
-            state.selectedEvalId ??
-            [...data.evalData.candidates].sort((a, b) => (b.composite ?? b.score) - (a.composite ?? a.score))[0]?.id ??
-            null,
+          selectedId: keepSelected,
+          selectedEvalId: keepEval,
         }
       })
     } catch (error) {
-      set({ loading: false, error: (error as Error).message })
+      if (!silent) {
+        set({ loading: false, refreshing: false, error: (error as Error).message })
+      }
     }
-  },
-
-  checkDoctor: async (force = false) => {
-    set({ checkingDoctor: true })
-    try {
-      const doctor = await api.doctor(force)
-      set({ doctor, checkingDoctor: false })
-    } catch (error) {
-      set({
-        doctor: { ok: false, message: (error as Error).message || '检查失败' },
-        checkingDoctor: false,
-      })
-    }
-  },
-
-  loadModels: async () => {
-    set({ loadingModels: true })
-    try {
-      const modelsCatalog = await api.models()
-      set({ modelsCatalog, loadingModels: false })
-    } catch {
-      set({ loadingModels: false })
-    }
-  },
-
-  selectModel: async (provider, model) => {
-    const res = await api.selectModel(provider, model)
-    set((state) => ({
-      modelsCatalog: state.modelsCatalog
-        ? { ...state.modelsCatalog, current: res.current }
-        : { runtime: 'deepseek-harness', current: res.current, providers: [] },
-      doctor: state.doctor
-        ? {
-            ...state.doctor,
-            modelMode: 'llm',
-            provider: res.current.provider,
-            modelId: res.current.model,
-            modelName: `${res.current.provider} / ${res.current.model}`,
-          }
-        : state.doctor,
-    }))
   },
 
   refresh: async () => {
     set({ refreshing: true })
     try {
-      const { pipeline, quota } = await api.refresh()
+      const data = (await api.data()) as DeskData
       set((state) => ({
-        pipeline,
-        quota,
+        pipeline: data.pipeline,
+        evalData: data.evalData,
+        quota: data.quota,
         refreshing: false,
         loadedAt: Date.now(),
         error: null,
-        selectedId: state.selectedId,
+        selectedId:
+          state.selectedId && data.pipeline.candidates.some((c) => c.id === state.selectedId)
+            ? state.selectedId
+            : data.pipeline.candidates[0]?.id ?? null,
       }))
     } catch (error) {
       set({ refreshing: false, error: (error as Error).message })
     }
   },
 
-  syncSourcing: async (payload) => {
-    set({ syncingSourcing: true })
-    try {
-      const res = await api.syncSourcing(payload)
-      set({
-        pipeline: res.pipeline,
-        quota: res.quota,
-        syncingSourcing: false,
-        loadedAt: Date.now(),
-        sourceFilter: payload.tab,
-        stage: 'all',
-        quickFilter: 'all',
-      })
-      return { count: res.count, job: res.job, tab: res.tab }
-    } catch (error) {
-      set({ syncingSourcing: false })
-      throw error
-    }
-  },
-
-  applyPipelinePatch: (pipeline, quota) =>
-    set((state) => ({
-      ...(pipeline ? { pipeline } : {}),
-      ...(quota !== undefined && quota !== null ? { quota } : {}),
-      loadedAt: pipeline ? Date.now() : state.loadedAt,
-    })),
+  setLiveConnected: (liveConnected) => set({ liveConnected }),
 
   toggleTheme: () =>
     set((state) => {
@@ -272,100 +191,7 @@ export const useDesk = create<DeskState>((set) => ({
   select: (selectedId) => set({ selectedId, detailOpen: Boolean(selectedId) }),
   selectEval: (selectedEvalId) => set({ selectedEvalId, detailOpen: Boolean(selectedEvalId) }),
   closeDetail: () => set({ detailOpen: false }),
-  toggleAssistant: (open) => set((state) => ({ assistantOpen: open ?? !state.assistantOpen })),
-  setSendDialogOpen: (sendDialogOpen) => set({ sendDialogOpen }),
-
-  moveStage: async (candidate, stage) => {
-    const previous = candidate.stage
-    if (previous === stage) return previous
-    applyStage(set, candidate.id, stage)
-    try {
-      const { pipeline } = await api.setStage({
-        name: candidate.name,
-        job: candidate.job,
-        stage,
-        score: candidate.score,
-      })
-      set({ pipeline })
-      return previous
-    } catch (error) {
-      applyStage(set, candidate.id, previous)
-      throw error
-    }
-  },
-
-  sendMessage: async (candidate, text) => {
-    const res = await api.send(candidate.name, text)
-    if (res.pipeline) {
-      set({ pipeline: res.pipeline, ...(res.quota ? { quota: res.quota } : {}) })
-      return
-    }
-    set((state) => {
-      if (!state.pipeline) return state
-      const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-      return {
-        pipeline: {
-          ...state.pipeline,
-          candidates: state.pipeline.candidates.map((item) =>
-            item.id === candidate.id
-              ? {
-                  ...item,
-                  stage: item.stage === 'new' ? ('greeted' as Stage) : item.stage,
-                  lastText: text,
-                  lastTime: now,
-                  messages: [...(item.messages || []), { text, time: now, from: 'myself' as const }],
-                }
-              : item,
-          ),
-        },
-        ...(res.quota ? { quota: res.quota } : {}),
-      }
-    })
-  },
-
-  greetCandidate: async (candidate) => {
-    const src = normalizeSource(candidate.source)
-    const tab = src === 'featured' ? 'featured' : 'recommend'
-    const res = await api.greet({
-      name: candidate.name,
-      geekId: candidate.geekId || undefined,
-      job: candidate.job || undefined,
-      tab,
-    })
-    if (res.pipeline) {
-      set({ pipeline: res.pipeline, ...(res.quota ? { quota: res.quota } : {}) })
-      return
-    }
-    set((state) => {
-      if (!state.pipeline) return state
-      return {
-        pipeline: {
-          ...state.pipeline,
-          candidates: state.pipeline.candidates.map((item) =>
-            item.id === candidate.id ? { ...item, stage: 'greeted' as Stage, canGreet: false } : item,
-          ),
-        },
-        ...(res.quota ? { quota: res.quota } : {}),
-      }
-    })
-  },
 }))
-
-function applyStage(
-  set: (partial: Partial<DeskState> | ((state: DeskState) => Partial<DeskState>)) => void,
-  id: string,
-  stage: Stage,
-) {
-  set((state) => {
-    if (!state.pipeline) return state
-    return {
-      pipeline: {
-        ...state.pipeline,
-        candidates: state.pipeline.candidates.map((c) => (c.id === id ? { ...c, stage } : c)),
-      },
-    }
-  })
-}
 
 export function sortCandidates(sort: SortKey) {
   return (a: Candidate, b: Candidate) => {

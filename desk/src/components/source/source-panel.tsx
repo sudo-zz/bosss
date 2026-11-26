@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { motion } from 'motion/react'
 import {
   ArrowDownUp,
   Briefcase,
   Columns3,
+  Copy,
   Crown,
-  DownloadCloud,
   FileText,
   Flame,
   Globe,
@@ -13,7 +13,6 @@ import {
   ImageIcon,
   Inbox,
   List,
-  Loader2,
   MapPin,
   MessageSquare,
   Radio,
@@ -31,21 +30,12 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -109,7 +99,6 @@ function quickFiltersForSource(sourceFilter: SourceFilterKey): QuickFilterSpec[]
 export function SourcePanel() {
   const {
     pipeline,
-    quota,
     loading,
     sourceFilter,
     stage,
@@ -130,11 +119,9 @@ export function SourcePanel() {
     refresh,
     refreshing,
   } = useDesk()
-  const [syncDialogOpen, setSyncDialogOpen] = useState(false)
 
   const candidates = pipeline?.candidates ?? EMPTY_CANDIDATES
 
-  // 按岗位先做一次切片，便于展示该岗位下各来源（消息列表 / 推荐牛人 / 精选牛人）的精确统计
   const positionScoped = useMemo(
     () => (position === 'all' ? candidates : candidates.filter((c) => c.positionId === position)),
     [candidates, position],
@@ -148,7 +135,6 @@ export function SourcePanel() {
     return counts
   }, [positionScoped])
 
-  // 当前来源（+岗位）切片，用于动态计算阶段统计与 KPI
   const sourceScoped = useMemo(
     () =>
       sourceFilter === 'all'
@@ -180,27 +166,50 @@ export function SourcePanel() {
     [sourceScoped],
   )
 
+  const localResumeStats = useMemo(() => {
+    let pdf = 0
+    let online = 0
+    for (const c of sourceScoped) {
+      if (c.resumePdfFile || c.evalPdfPath) pdf += 1
+      if (c.onlineResumeFile) online += 1
+    }
+    return { total: pdf + online, pdf, online }
+  }, [sourceScoped])
+
   if (loading && !pipeline) {
     return <ListSkeleton />
   }
 
   const stats = pipeline?.stats
-  const sendQuota = quota?.quotas?.send ?? pipeline?.stats.quota?.quotas?.send
-  const greetQuota = quota?.quotas?.greet ?? pipeline?.stats.quota?.quotas?.greet
   const isSourcingView = sourceFilter === 'recommend' || sourceFilter === 'featured'
-  const reached =
-    (stageCounts.greeted || 0) + (stageCounts.replied || 0) + (stageCounts.interview || 0)
+  const reached = (stageCounts.greeted || 0) + (stageCounts.replied || 0) + (stageCounts.interview || 0)
   const awaiting = (stageCounts.greeted || 0) + (stageCounts.shortlisted || 0)
   const hasActiveFilter =
     sourceFilter !== 'all' || stage !== 'all' || quickFilter !== 'all' || position !== 'all' || Boolean(query.trim())
   const quickFilters = quickFiltersForSource(sourceFilter)
+
+  const copyAgentPrompt = async (prompt: string) => {
+    try {
+      await navigator.clipboard.writeText(prompt)
+      toast.success('已复制 Agent 指令', { description: '直接粘贴到左侧 WorkBuddy / 千问办公 / 豆包工作 对话框即可执行' })
+    } catch {
+      toast.error('复制失败')
+    }
+  }
+
+  const emptySourcingPrompt =
+    sourceFilter === 'featured'
+      ? '请调用 boss recommend --tab featured --limit 20 --sync-tracker --json 从 Boss 精选牛人拉取候选人并写入台账，右侧看板会自动刷新。'
+      : sourceFilter === 'recommend'
+        ? '请调用 boss recommend --tab recommend --limit 20 --sync-tracker --json 从 Boss 推荐牛人拉取候选人并写入台账，右侧看板会自动刷新。'
+        : '请先调用 boss doctor --json 检查 Safari，再巡检未读消息或导入本地 PDF 简历到 ~/.boss-cli/，右侧看板会自动刷新。'
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* 顶部 KPI 统计卡（随来源与岗位实时联动） */}
       <div className="grid shrink-0 grid-cols-2 gap-2.5 px-4 pt-3.5 sm:grid-cols-4">
         <StatCard
-          label={sourceFilter === 'all' ? '在库候选人' : `${SOURCE_META[sourceFilter].label}`}
+          label={sourceFilter === 'all' ? '在库候选人' : SOURCE_META[sourceFilter].label}
           value={sourceScoped.length}
           unit="人"
           hint={`消息 ${sourceCounts.message} · 推荐 ${sourceCounts.recommend} · 精选 ${sourceCounts.featured}`}
@@ -212,17 +221,17 @@ export function SourcePanel() {
             label="待打招呼"
             value={notGreetedCount}
             unit="人"
-            hint={`在线/刚活跃可优先打招呼`}
+            hint="在线/刚活跃可优先跟进"
             accent="emerald"
             active={quickFilter === 'not_greeted'}
             onClick={() => setQuickFilter('not_greeted')}
           />
         ) : (
           <StatCard
-            label="高分待触达"
+            label="高分待推进"
             value={highUncontactedCount}
             unit="人"
-            hint="≥70分 · 优先发消息"
+            hint="≥70分 · 待发起沟通"
             accent="emerald"
             active={quickFilter === 'high_uncontacted'}
             onClick={() => setQuickFilter('high_uncontacted')}
@@ -232,28 +241,19 @@ export function SourcePanel() {
           label="已触达 / 跟进"
           value={reached}
           unit="人"
-          hint={`待回复 ${awaiting} 人 · 今日新增 +${stats?.todayNew ?? 0}`}
+          hint={`待回复 ${awaiting} 人 · 今日 +${stats?.todayNew ?? 0}`}
           accent="amber"
           active={quickFilter === 'awaiting_reply'}
           onClick={() => setQuickFilter('awaiting_reply')}
         />
-        {isSourcingView ? (
-          <StatCard
-            label="今日打招呼额度"
-            value={greetQuota?.used ?? 0}
-            unit={`/ ${greetQuota?.limit ?? 20}`}
-            hint="推荐 / 精选牛人受控确认"
-            progress={greetQuota ? Math.min(100, (greetQuota.used / Math.max(1, greetQuota.limit)) * 100) : 0}
-          />
-        ) : (
-          <StatCard
-            label="今日发送额度"
-            value={sendQuota?.used ?? 0}
-            unit={`/ ${sendQuota?.limit ?? 40}`}
-            hint={pipeline?.stats.quota?.mode?.includes('dry') ? '受控确认模式' : '已确认发送'}
-            progress={sendQuota ? Math.min(100, (sendQuota.used / Math.max(1, sendQuota.limit)) * 100) : 0}
-          />
-        )}
+        <StatCard
+          label="本地简历存档"
+          value={localResumeStats.total}
+          unit="份"
+          hint={`PDF ${localResumeStats.pdf} · 在线简历 ${localResumeStats.online}`}
+          active={quickFilter === 'has_local_resume'}
+          onClick={() => setQuickFilter('has_local_resume')}
+        />
       </div>
 
       {/* 来源渠道切换与统计栏（消息列表 / 推荐牛人 / 精选牛人，不含最新） */}
@@ -291,17 +291,6 @@ export function SourcePanel() {
             dotClass={SOURCE_META.featured.dotClass}
           />
         </div>
-
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          onClick={() => setSyncDialogOpen(true)}
-          className="ml-auto h-7.5 gap-1.5 border-primary/25 bg-primary/[0.04] px-2.5 text-[11.5px] font-medium text-primary hover:bg-primary/10"
-        >
-          <DownloadCloud className="size-3.5" />
-          拉取推荐 / 精选
-        </Button>
       </div>
 
       {/* 阶段流转筛选 */}
@@ -415,21 +404,28 @@ export function SourcePanel() {
                         <SearchX />
                       </EmptyMedia>
                       <EmptyTitle>
-                        {isSourcingView && sourceScoped.length === 0
-                          ? `暂无「${SOURCE_META[sourceFilter].label}」记录`
+                        {sourceScoped.length === 0
+                          ? sourceFilter === 'all'
+                            ? '当前本地招聘台账为空'
+                            : `暂无「${SOURCE_META[sourceFilter].label}」记录`
                           : '没有符合条件的候选人'}
                       </EmptyTitle>
                       <EmptyDescription>
-                        {isSourcingView && sourceScoped.length === 0
-                          ? `点击上方「拉取推荐 / 精选」通过本机 Safari 拉取 Boss ${SOURCE_META[sourceFilter].label} 列表并自动打上岗位与来源标签。`
+                        {sourceScoped.length === 0
+                          ? '在左侧 Agent（WorkBuddy / 千问办公 / 豆包工作）对话中下达 Boss 抓取或本地 PDF 简历归档指令，本页面将自动实时刷新展示。'
                           : '尝试切换来源、阶段、关闭快捷筛选或清空搜索关键词。'}
                       </EmptyDescription>
                     </EmptyHeader>
-                    <div className="flex items-center gap-2">
-                      {isSourcingView && sourceScoped.length === 0 && (
-                        <Button size="sm" onClick={() => setSyncDialogOpen(true)} className="gap-1.5">
-                          <DownloadCloud className="size-3.5" />
-                          立即拉取{SOURCE_META[sourceFilter].label}
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {sourceScoped.length === 0 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void copyAgentPrompt(emptySourcingPrompt)}
+                          className="gap-1.5"
+                        >
+                          <Copy className="size-3.5" />
+                          复制拉取指令给左侧 Agent
                         </Button>
                       )}
                       {hasActiveFilter && (
@@ -474,236 +470,20 @@ export function SourcePanel() {
           </span>
           <span className="mx-0.5 opacity-35">·</span>
           <span>更新 {pipeline?.meta.generatedAt.slice(11, 16)}</span>
-          <span className="ml-2 hidden text-[10px] text-muted-foreground/75 xl:inline">
-            ↑↓ 切人 · S 短名单 · M 发消息
-          </span>
+          <span className="ml-2 hidden text-[10px] text-muted-foreground/75 xl:inline">↑↓ 切人 · / 搜索 · 只读展示</span>
         </span>
         <Button
           variant="ghost"
           size="xs"
           className="h-6 text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={() => refresh()}
+          onClick={() => void refresh()}
           disabled={refreshing}
         >
           <RefreshCw className={refreshing ? 'size-3 animate-spin' : 'size-3'} />
-          {refreshing ? '同步中' : '同步台账'}
+          {refreshing ? '读取中' : '重新读取'}
         </Button>
       </div>
-
-      <SourcingSyncDialog
-        key={`${sourceFilter}-${position}-${syncDialogOpen ? '1' : '0'}`}
-        open={syncDialogOpen}
-        onOpenChange={setSyncDialogOpen}
-        defaultTab={sourceFilter === 'featured' ? 'featured' : 'recommend'}
-        defaultJob={
-          position !== 'all'
-            ? pipeline?.meta.positions.find((p) => p.id === position)?.short || ''
-            : ''
-        }
-        positions={pipeline?.meta.positions || []}
-      />
     </div>
-  )
-}
-
-function SourcingSyncDialog({
-  open,
-  onOpenChange,
-  defaultTab,
-  defaultJob,
-  positions,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  defaultTab: 'recommend' | 'featured'
-  defaultJob: string
-  positions: { id: string; name: string; short: string }[]
-}) {
-  const { syncSourcing, syncingSourcing } = useDesk()
-  const [tab, setTab] = useState<'recommend' | 'featured'>(defaultTab)
-  const [job, setJob] = useState(defaultJob)
-  const [limit, setLimit] = useState(20)
-  const [skipViewed, setSkipViewed] = useState(true)
-  const [skipColleague, setSkipColleague] = useState(true)
-
-  const handleSync = async () => {
-    try {
-      const res = await syncSourcing({
-        tab,
-        job: job.trim() || undefined,
-        limit,
-        skipViewed,
-        skipColleague,
-      })
-      toast.success(`已拉取 ${res.count} 位「${SOURCE_META[res.tab].label}」候选人`, {
-        description: `${res.job ? `岗位：${res.job} · ` : ''}已自动写入台账并打上岗位标签 + 来源标签`,
-      })
-      onOpenChange(false)
-    } catch (error) {
-      toast.error((error as Error).message || '拉取失败')
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[460px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-[15px]">
-            <DownloadCloud className="size-4 text-primary" />
-            从 Boss 拉取推荐 / 精选牛人
-          </DialogTitle>
-          <DialogDescription className="text-[12px]">
-            通过本机 Safari 读取「推荐牛人」中的「推荐」或「精选」列表（不含「最新」），并按所选岗位自动入库打标。
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-1">
-          <div className="space-y-1.5">
-            <label className="text-[11.5px] font-medium text-foreground">拉取来源（二选一）</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setTab('recommend')}
-                disabled={syncingSourcing}
-                className={cn(
-                  'flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-all',
-                  tab === 'recommend'
-                    ? 'border-violet-500/50 bg-violet-500/8 ring-1 ring-violet-500/20'
-                    : 'border-border bg-card hover:border-foreground/20',
-                )}
-              >
-                <span className="flex items-center gap-1.5 text-[12.5px] font-semibold">
-                  <UserPlus className="size-3.5 text-violet-600 dark:text-violet-400" />
-                  推荐牛人
-                </span>
-                <span className="text-[11px] text-muted-foreground">Boss「推荐」默认算法推荐池</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setTab('featured')}
-                disabled={syncingSourcing}
-                className={cn(
-                  'flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-all',
-                  tab === 'featured'
-                    ? 'border-amber-500/50 bg-amber-500/8 ring-1 ring-amber-500/20'
-                    : 'border-border bg-card hover:border-foreground/20',
-                )}
-              >
-                <span className="flex items-center gap-1.5 text-[12.5px] font-semibold">
-                  <Crown className="size-3.5 text-amber-600 dark:text-amber-400" />
-                  精选牛人
-                </span>
-                <span className="text-[11px] text-muted-foreground">Boss「精选」高匹配严选池</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-[11.5px] font-medium text-foreground">目标岗位（将切换 Boss 岗位下拉并打岗位标签）</label>
-            <div className="flex flex-wrap gap-1.5">
-              <button
-                type="button"
-                disabled={syncingSourcing}
-                onClick={() => setJob('')}
-                className={cn(
-                  'rounded-full border px-2.5 py-1 text-[11px] transition-colors',
-                  !job
-                    ? 'border-foreground bg-foreground text-background'
-                    : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',
-                )}
-              >
-                保持 Safari 当前岗位
-              </button>
-              {positions.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  disabled={syncingSourcing}
-                  onClick={() => setJob(p.short)}
-                  className={cn(
-                    'rounded-full border px-2.5 py-1 text-[11px] transition-colors',
-                    job === p.short
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {p.short}
-                </button>
-              ))}
-            </div>
-            <input
-              type="text"
-              value={job}
-              onChange={(e) => setJob(e.target.value)}
-              disabled={syncingSourcing}
-              placeholder="也可直接输入岗位关键词，如：新媒体运营 / AI应用开发"
-              className="mt-1 h-8 w-full rounded-lg border bg-background px-2.5 text-[12px] outline-none focus:border-foreground/40"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-[11.5px] font-medium text-foreground">本次拉取数量</label>
-              <div className="flex gap-1.5">
-                {[10, 20, 30].map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    disabled={syncingSourcing}
-                    onClick={() => setLimit(n)}
-                    className={cn(
-                      'flex-1 rounded-lg border py-1.5 text-[11.5px] font-medium tabular-nums transition-colors',
-                      limit === n
-                        ? 'border-foreground bg-foreground text-background'
-                        : 'border-border bg-card text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    {n} 人
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[11.5px] font-medium text-foreground">过滤规则</label>
-              <div className="space-y-1.5 pt-0.5 text-[11.5px] text-muted-foreground">
-                <label className="flex cursor-pointer items-center gap-1.5 select-none">
-                  <input
-                    type="checkbox"
-                    checked={skipViewed}
-                    disabled={syncingSourcing}
-                    onChange={(e) => setSkipViewed(e.target.checked)}
-                    className="size-3.5 rounded accent-foreground"
-                  />
-                  跳过已看过
-                </label>
-                <label className="flex cursor-pointer items-center gap-1.5 select-none">
-                  <input
-                    type="checkbox"
-                    checked={skipColleague}
-                    disabled={syncingSourcing}
-                    onChange={(e) => setSkipColleague(e.target.checked)}
-                    className="size-3.5 rounded accent-foreground"
-                  />
-                  跳过同事已沟通
-                </label>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={syncingSourcing}>
-            取消
-          </Button>
-          <Button onClick={() => void handleSync()} disabled={syncingSourcing} className="gap-1.5">
-            {syncingSourcing ? <Loader2 className="size-3.5 animate-spin" /> : <DownloadCloud className="size-3.5" />}
-            {syncingSourcing ? '正在读取本机 Safari…' : `开始拉取${SOURCE_META[tab].label}`}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 
@@ -756,7 +536,6 @@ function StatCard({
   value,
   unit,
   hint,
-  progress,
   accent,
   active,
   onClick,
@@ -765,7 +544,6 @@ function StatCard({
   value: number
   unit: string
   hint: string
-  progress?: number
   accent?: 'emerald' | 'amber'
   active?: boolean
   onClick?: () => void
@@ -798,7 +576,6 @@ function StatCard({
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <span className="truncate text-[10.5px] text-muted-foreground/90">{hint}</span>
-        {typeof progress === 'number' && <Progress value={progress} className="h-1 w-11 shrink-0" />}
       </div>
     </Tag>
   )
@@ -930,12 +707,10 @@ export function CandidateRow({
             <Badge className={cn('h-4.5 rounded px-1.5 text-[10px] font-normal', STAGE_CLASS[candidate.stage])}>
               {STAGE_LABEL[candidate.stage]}
             </Badge>
-            {/* 岗位标签 */}
             <Badge variant="outline" className="h-4.5 gap-0.5 rounded px-1.5 text-[10px] font-normal text-foreground/80">
               <Briefcase className="size-2.5 text-muted-foreground" />
               {posLabel}
             </Badge>
-            {/* 来源标签 */}
             <Badge variant="outline" className={cn('h-4.5 rounded px-1.5 text-[10px] font-normal', srcMeta.className)}>
               {srcMeta.label}
             </Badge>

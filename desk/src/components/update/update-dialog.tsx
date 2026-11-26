@@ -203,7 +203,7 @@ function UpdateDialogBody() {
         await new Promise((r) => setTimeout(r, 800))
       }
       setRestarting(false)
-      toast.info('重启等待超时，请手动刷新页面或在终端重新运行 boss-dsh')
+      toast.info('重启等待超时，请手动刷新页面或在终端重新运行 boss-desk')
     }
     void poll()
   }
@@ -240,7 +240,7 @@ function UpdateDialogBody() {
             <div>
               <span className="font-medium">数据零影响保证：</span>
               更新仅原子替换程序目录，绝不改动 <code className="rounded bg-emerald-500/10 px-1">~/.boss-cli/</code>{' '}
-              里的 PDF 简历、在线简历存档、候选人台账与头像，以及 DSH 模型配置。
+              里的 PDF 简历、在线简历存档、候选人台账、面试评估与头像数据。
             </div>
           </div>
 

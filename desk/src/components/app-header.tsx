@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDownToLine, Moon, RefreshCw, Search, Sparkles, Sun, X } from 'lucide-react'
+import { ArrowDownToLine, Moon, RefreshCw, Search, Sun, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,19 +17,12 @@ export function AppHeader() {
     setQuery,
     refresh,
     refreshing,
-    assistantOpen,
-    toggleAssistant,
+    liveConnected,
     pipeline,
     evalData,
-    doctor,
-    checkingDoctor,
-    checkDoctor,
     theme,
     toggleTheme,
   } = useDesk()
-
-  const safariOk = Boolean(doctor?.ok && doctor?.loggedInShell)
-  const safariWarn = Boolean(doctor && !safariOk)
   const [updateOpen, setUpdateOpen] = useState(false)
 
   return (
@@ -40,7 +33,7 @@ export function AppHeader() {
         </div>
         <div className="hidden leading-tight sm:block">
           <div className="text-[13.5px] font-semibold tracking-tight">招聘助手</div>
-          <div className="hidden text-[10px] text-muted-foreground lg:block">Boss Safari 工作台</div>
+          <div className="hidden text-[10px] text-muted-foreground lg:block">本地候选人展示看板</div>
         </div>
       </div>
 
@@ -61,7 +54,7 @@ export function AppHeader() {
         </TabsList>
       </Tabs>
 
-      <div className="relative ml-auto w-[220px] max-w-[34vw] lg:w-[270px]">
+      <div className="relative ml-auto w-[220px] max-w-[38vw] lg:w-[280px]">
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           id="desk-global-search"
@@ -90,54 +83,39 @@ export function AppHeader() {
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={() => checkDoctor(true)}
-            disabled={checkingDoctor}
+            onClick={() => void refresh()}
+            disabled={refreshing}
             className={cn(
               'hidden h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors md:inline-flex',
-              safariOk
+              liveConnected
                 ? 'border-emerald-500/25 bg-emerald-500/8 text-emerald-700 hover:bg-emerald-500/12 dark:text-emerald-300'
-                : safariWarn
-                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300'
-                  : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70',
+                : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70',
             )}
           >
             <span
               className={cn(
                 'size-1.5 rounded-full',
-                checkingDoctor
-                  ? 'animate-pulse bg-sky-500'
-                  : safariOk
-                    ? 'bg-emerald-500'
-                    : safariWarn
-                      ? 'bg-amber-500'
-                      : 'bg-zinc-400',
+                refreshing ? 'animate-pulse bg-sky-500' : liveConnected ? 'bg-emerald-500' : 'bg-zinc-400',
               )}
             />
-            {checkingDoctor ? '检测中' : safariOk ? 'Safari 就绪' : safariWarn ? '待登录 Safari' : 'Safari'}
+            {refreshing ? '同步中' : liveConnected ? '实时同步' : '手动同步'}
           </button>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="max-w-[260px]">
           <div className="space-y-0.5 text-[11px]">
             <div className="font-medium">
-              {safariOk ? '本机 Safari 已登录 Boss 招聘端' : doctor?.message || '点击检查本机 Safari 与 Boss 登录态'}
+              {liveConnected ? '正在监听 ~/.boss-cli/ 数据目录' : '实时监听未连接，点击手动刷新'}
             </div>
-            {doctor?.modelMode && (
-              <div className="opacity-80">
-                助手模式：{doctor.modelMode === 'llm' ? `在线模型 (${doctor.modelName})` : '本地台账助手'}
-              </div>
-            )}
+            <div className="opacity-80">
+              当你的 Agent（如 WorkBuddy）写入新简历或台账时，页面会自动无感刷新。
+            </div>
           </div>
         </TooltipContent>
       </Tooltip>
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setUpdateOpen(true)}
-            aria-label="检查更新"
-          >
+          <Button variant="ghost" size="icon-sm" onClick={() => setUpdateOpen(true)} aria-label="检查更新">
             <ArrowDownToLine className="size-3.5" />
           </Button>
         </TooltipTrigger>
@@ -158,31 +136,16 @@ export function AppHeader() {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => refresh()}
+            onClick={() => void refresh()}
             disabled={refreshing}
-            aria-label="同步本地数据"
+            aria-label="重新读取本地数据"
           >
             <RefreshCw className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'} />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>从台账重新读取（不刷新页面）</TooltipContent>
+        <TooltipContent>立即重新读取本地数据</TooltipContent>
       </Tooltip>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant={assistantOpen ? 'secondary' : 'outline'}
-            size="sm"
-            onClick={() => toggleAssistant()}
-            className="h-7 gap-1.5 px-2.5 text-[11.5px]"
-            aria-label="招聘助手"
-          >
-            <Sparkles className="size-3.5" />
-            <span className="hidden sm:inline">助手</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>{assistantOpen ? '收起招聘助手' : '打开招聘助手'}</TooltipContent>
-      </Tooltip>
       <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
     </header>
   )

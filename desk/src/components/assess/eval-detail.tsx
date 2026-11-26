@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   ArrowUpRight,
   BookOpen,
-  Bot,
   BriefcaseBusiness,
   Building2,
   CalendarDays,
@@ -29,16 +28,13 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import type { AssistantCandidateContext } from '@/lib/api'
 import { avatarUrl, initials, resumeSrc, scoreClass, statusLabel, tintFor } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useChat } from '@/store/chat'
 import { useDesk } from '@/store/desk'
 import type { EvalCandidate } from '@/types'
 
 export function EvalDetail({ candidate }: { candidate: EvalCandidate | null }) {
-  const { evalData, pipeline, setModule, select, toggleAssistant } = useDesk()
-  const askAssistant = useChat((s) => s.send)
+  const { evalData, pipeline, setModule, select } = useDesk()
   const [resumeOpen, setResumeOpen] = useState(false)
   const [pdfViewerOpen, setPdfViewerOpen] = useState(false)
   const [pdfViewerTab, setPdfViewerTab] = useState<ResumeViewerTab>('pdf')
@@ -74,31 +70,6 @@ export function EvalDetail({ candidate }: { candidate: EvalCandidate | null }) {
   const modules = Array.isArray(interview?.modules)
     ? (interview.modules as { title?: string; items?: string[]; tone?: string }[])
     : []
-
-  const askEvalAssistant = () => {
-    toggleAssistant(true)
-    const ctx: AssistantCandidateContext = {
-      kind: 'assess',
-      name: candidate.name,
-      job: position?.name || candidate.intent,
-      stage: statusLabel(candidate.status),
-      score,
-      summary: candidate.tagline || candidate.current,
-      facts: {
-        age: candidate.age ? `${candidate.age}岁` : undefined,
-        exp: candidate.years,
-        edu: candidate.education,
-        city: candidate.location,
-        salary: candidate.salaryNote,
-        school: [candidate.school, candidate.major].filter(Boolean).join(' · '),
-        latestWork: candidate.current,
-      },
-      highlights: candidate.pros,
-      risks: candidate.cons,
-      questions: candidate.questions,
-    }
-    void askAssistant(`结合面试深度评估，总结「${candidate.name}」的录用/淘汰建议与下轮关键追问。`, ctx)
-  }
 
   return (
     <PanelSwap id={candidate.id}>
@@ -158,12 +129,12 @@ export function EvalDetail({ candidate }: { candidate: EvalCandidate | null }) {
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <Button
             size="sm"
-            variant="outline"
+            variant={localPdfFile ? 'default' : 'outline'}
             onClick={() => openEmbeddedResume('pdf', 1)}
             className="gap-1.5"
           >
-            <FileText className={cn('size-3.5', localPdfFile && 'text-rose-600 dark:text-rose-400')} />
-            {localPdfFile ? '内嵌 PDF 简历' : '绑定本地 PDF'}
+            <FileText className="size-3.5" />
+            {localPdfFile ? '内嵌 PDF 简历' : 'PDF 简历'}
           </Button>
           <Button
             size="sm"
@@ -180,13 +151,10 @@ export function EvalDetail({ candidate }: { candidate: EvalCandidate | null }) {
               原简历 {candidate.resumePages.length} 页
             </Button>
           ) : null}
-          <Button size="sm" variant="outline" onClick={askEvalAssistant} className="gap-1.5">
-            <Bot className="size-3.5" />
-            问助手深挖
-          </Button>
           {linked && (
             <Button
               size="sm"
+              variant="outline"
               onClick={() => {
                 select(linked.id)
                 setModule('source')
@@ -194,7 +162,7 @@ export function EvalDetail({ candidate }: { candidate: EvalCandidate | null }) {
               className="gap-1.5"
             >
               <ArrowUpRight className="size-3.5" />
-              去筛选页沟通
+              去筛选页查看
             </Button>
           )}
         </div>
@@ -443,7 +411,6 @@ export function EvalDetail({ candidate }: { candidate: EvalCandidate | null }) {
         totalPagesHint={candidate.resumePages?.length}
         candidateName={candidate.name}
         job={linked?.job || position?.name || candidate.intent}
-        geekId={linked?.geekId}
         source={linked?.source || 'message'}
         pdfFile={localPdfFile}
         onlineResumeFile={linked?.onlineResumeFile}

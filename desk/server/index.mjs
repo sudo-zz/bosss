@@ -1,28 +1,28 @@
 #!/usr/bin/env node
 /**
- * 招聘助手 · 本地服务
+ * 招聘助手 · 本地只读展示服务（纯静态展示 + 自动监听刷新 + 安全检查更新）
  *
- * - 无账号系统：本机单实例直接使用，台账与数据默认共用
- * - 数据接口：读取 web/pipeline.json 与评估库，写操作走 boss CLI（参数数组，不拼 shell）
- * - AI 助手：SSE 流式。有 OPENAI_API_KEY / DEEPSEEK_API_KEY 时走真实模型，否则用本地数据助手
- *
- * 只监听 127.0.0.1，不对外暴露。
+ * 设计理念：
+ *   - 专配 WorkBuddy / 千问办公 / 豆包工作 等带浏览器分屏的桌面 Agent 使用
+ *   - 网页本身只做「只读展示、筛选、统计、内嵌 PDF 跳页查看、Boss 在线简历本地查看」
+ *   - 所有 Boss / Safari 操作由外部 Agent 通过 `boss` CLI 完成并写入 `~/.boss-cli/`
+ *   - 服务通过 fs.watch + SSE (/api/events) 实时监听 `~/.boss-cli/` 变化，浏览器自动无感刷新
+ *   - 新机器无本地数据时默认初始化为空（0 人），不预装任何候选人隐私数据
+ *   - 只监听 127.0.0.1，不对外暴露
  */
-import { createServer } from 'node:http'
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   statSync,
-  writeFileSync,
+  watch,
 } from 'node:fs'
+import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 import {
   RESTART_EXIT_CODE,
   checkForUpdate,
@@ -30,418 +30,112 @@ import {
   getUpdateStatus,
   installUpdateFromBase64,
   markRestartRequested,
+  readAppVersionInfo,
   saveUpdateConfig,
-} from '../../packages/dsh-plugin-boss-recruiter/lib/updater.js'
+} from '../../scripts/updater.mjs'
 
-const execFileAsync = promisify(execFile)
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
 const DIST = path.join(ROOT, 'desk', 'dist')
-const EVAL_ASSETS = path.join(ROOT, 'web', 'assets')
 const BOSS_HOME = path.join(homedir(), '.boss-cli')
 const RESUME_PDF_DIR = path.join(BOSS_HOME, 'resumes', 'pdf')
 const RESUME_ONLINE_DIR = path.join(BOSS_HOME, 'resumes', 'online')
 const RESUME_SCREENSHOT_DIR = path.join(BOSS_HOME, '.cache', 'resume-screenshots')
 const RESUME_CACHE_DIR = path.join(BOSS_HOME, '.cache', 'resumes')
+const SOURCING_DIR = path.join(BOSS_HOME, 'sourcing')
+const LOCAL_EVAL_DIR = path.join(BOSS_HOME, 'eval')
+const AVATAR_DIRS = [path.join(BOSS_HOME, 'avatars'), path.join(ROOT, 'web', 'avatars')]
+const EVAL_ASSET_DIRS = [path.join(LOCAL_EVAL_DIR, 'assets'), path.join(ROOT, 'web', 'assets')]
 const EVAL_PDF_DIRS = [
+  RESUME_PDF_DIR,
+  path.join(LOCAL_EVAL_DIR, 'pdfs'),
   path.join(ROOT, 'web', 'pdfs'),
   ...(process.env.EVAL_DIR ? [path.join(process.env.EVAL_DIR, 'pdfs')] : []),
 ]
-const SEED_DIR = path.join(ROOT, 'data')
-const AVATAR_DIRS = [path.join(BOSS_HOME, 'avatars'), path.join(ROOT, 'web', 'avatars')]
 const PORT = Number(process.env.DESK_PORT || 7788)
 
-mkdirSync(BOSS_HOME, { recursive: true })
-mkdirSync(RESUME_PDF_DIR, { recursive: true })
-mkdirSync(RESUME_ONLINE_DIR, { recursive: true })
-mkdirSync(path.join(BOSS_HOME, 'sourcing'), { recursive: true })
-
-/* 新机器首次运行：把仓库 data/ 里的台账、巡检快照恢复进 ~/.boss-cli（不覆盖已有文件） */
-function seedBossHome() {
-  if (!existsSync(SEED_DIR)) return
-  const files = [
-    ['tracker.json', 'tracker.json'],
-    ['inspect-xinmeiti.json', 'inspect-xinmeiti.json'],
-    ['quota.json', 'quota.json'],
-  ]
-  for (const [from, to] of files) {
-    const src = path.join(SEED_DIR, from)
-    const dest = path.join(BOSS_HOME, to)
-    if (existsSync(src) && !existsSync(dest)) {
-      copyFileSync(src, dest)
-      console.log(`  ↺ 恢复数据 ${to}`)
-    }
-  }
-  const jdSeed = path.join(SEED_DIR, 'jd')
-  if (existsSync(jdSeed)) {
-    mkdirSync(path.join(BOSS_HOME, 'jd'), { recursive: true })
-    for (const name of readdirSync(jdSeed)) {
-      const dest = path.join(BOSS_HOME, 'jd', name)
-      if (!existsSync(dest)) copyFileSync(path.join(jdSeed, name), dest)
-    }
-  }
+// 确保本机空目录结构存在（不写入任何样例候选人）
+for (const dir of [BOSS_HOME, RESUME_PDF_DIR, RESUME_ONLINE_DIR, SOURCING_DIR, LOCAL_EVAL_DIR]) {
+  mkdirSync(dir, { recursive: true })
 }
 
-seedBossHome()
+/* ------------------------------------------------------------------ 常量与工具 */
 
-/* ------------------------------------------------------------------ 数据 */
-
-let cache = { at: 0, pipeline: null, evalData: null }
-
-function readPipeline() {
-  const file = path.join(ROOT, 'web', 'pipeline.json')
-  return JSON.parse(readFileSync(file, 'utf8'))
-}
-
-function readEval() {
-  const file = path.join(ROOT, 'web', 'data.js')
-  const text = readFileSync(file, 'utf8')
-  return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
-}
-
-async function rebuildPipeline() {
-  await execFileAsync(process.execPath, [path.join(ROOT, 'web', 'build.mjs')], {
-    cwd: ROOT,
-    timeout: 180_000,
-  })
-  return loadData(true)
-}
-
-function loadData(force = false) {
-  if (!force && cache.pipeline && Date.now() - cache.at < 5000) return cache
-  cache = { at: Date.now(), pipeline: readPipeline(), evalData: readEval() }
-  return cache
-}
-
-function readQuota() {
-  const file = path.join(BOSS_HOME, 'quota.json')
-  if (!existsSync(file)) return null
-  try {
-    return JSON.parse(readFileSync(file, 'utf8'))
-  } catch {
-    return null
-  }
-}
-
-function bossCli(args) {
-  return execFileAsync(process.execPath, [path.join(ROOT, 'dist', 'cli', 'index.js'), ...args], {
-    cwd: ROOT,
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: 180_000,
-  })
-}
-
-/* ------------------------------------------------------------------ AI */
-
-const LOCAL_STAGES = [
-  '正在读取本地台账',
-  '按阶段与匹配分排序',
-  '整理下一步动作',
+const STAGE_META = [
+  { key: 'new', label: '新线索', tone: 'gray' },
+  { key: 'screened', label: '初筛通过', tone: 'blue' },
+  { key: 'shortlisted', label: '进短名单', tone: 'blue' },
+  { key: 'greeted', label: '已打招呼', tone: 'amber' },
+  { key: 'replied', label: '已回复', tone: 'amber' },
+  { key: 'interview', label: '已约面', tone: 'green' },
+  { key: 'hold', label: '暂缓', tone: 'gray' },
+  { key: 'rejected', label: '已淘汰', tone: 'red' },
 ]
+const ALLOWED_STAGES = new Set(STAGE_META.map((s) => s.key))
 
-function stageLabel(key, pipeline) {
-  return pipeline.meta.stageMeta.find((s) => s.key === key)?.label || key
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
+  '.woff2': 'font/woff2',
+  '.ico': 'image/x-icon',
 }
 
-function topCandidates(pipeline, limit = 5) {
-  return [...pipeline.candidates]
-    .filter((c) => typeof c.score === 'number')
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-}
-
-let doctorCache = { at: 0, value: null }
-
-function currentModelInfo() {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY
-  if (!apiKey) return { modelMode: 'local', modelName: '本地台账引擎' }
-  const model = process.env.DESK_MODEL || (process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'gpt-4o-mini')
-  return { modelMode: 'llm', modelName: model }
-}
-
-async function checkSafariDoctor(force = false) {
-  if (!force && doctorCache.value && Date.now() - doctorCache.at < 20_000) {
-    return doctorCache.value
-  }
-  const modelInfo = currentModelInfo()
+function safeReadJson(filePath, fallback = null) {
+  if (!filePath || !existsSync(filePath)) return fallback
   try {
-    const { stdout } = await execFileAsync(
-      process.execPath,
-      [path.join(ROOT, 'dist', 'cli', 'index.js'), 'doctor', '--json'],
-      { cwd: ROOT, maxBuffer: 2 * 1024 * 1024, timeout: 12_000 },
-    )
-    const parsed = JSON.parse(stdout)
-    const value = {
-      ok: Boolean(parsed.safariRunning && parsed.jsAppleEventsEnabled && parsed.loggedInShell),
-      safariRunning: Boolean(parsed.safariRunning),
-      jsAppleEventsEnabled: Boolean(parsed.jsAppleEventsEnabled),
-      loggedInShell: Boolean(parsed.loggedInShell),
-      tabTitle: parsed.bossTab?.title || '',
-      message: parsed.manualInterventionMessage || (parsed.loggedInShell ? '本机 Safari 已就绪' : '请先在 Safari 登录 Boss 直聘'),
-      ...modelInfo,
-      checkedAt: new Date().toISOString(),
-    }
-    doctorCache = { at: Date.now(), value }
-    return value
-  } catch (error) {
-    const value = {
-      ok: false,
-      safariRunning: false,
-      jsAppleEventsEnabled: false,
-      loggedInShell: false,
-      message: error.message || 'Safari 状态检测失败',
-      ...modelInfo,
-      checkedAt: new Date().toISOString(),
-    }
-    doctorCache = { at: Date.now(), value }
-    return value
+    return JSON.parse(readFileSync(filePath, 'utf8'))
+  } catch {
+    return fallback
   }
 }
 
-function localCandidateAnswer(question, ctx) {
-  const lines = []
-  lines.push(`【候选人速评】${ctx.name}${typeof ctx.score === 'number' ? `（${ctx.score} 分）` : ''}｜${ctx.job || '岗位未标'}｜${ctx.stage || ''}`)
-  const factParts = [ctx.facts?.age, ctx.facts?.exp, ctx.facts?.edu, ctx.facts?.city, ctx.facts?.salary].filter(Boolean)
-  if (factParts.length) lines.push(`基础画像：${factParts.join(' · ')}`)
-  if (ctx.summary) lines.push(`摘要：${ctx.summary}`)
-  if (ctx.highlights?.length) {
-    lines.push('亮点证据：')
-    for (const h of ctx.highlights.slice(0, 4)) lines.push(`· ${h}`)
-  }
-  if (ctx.risks?.length) {
-    lines.push('需优先核实风险：')
-    for (const r of ctx.risks.slice(0, 3)) lines.push(`· ${r}`)
-  }
-  if (/面试题|追问|深挖/.test(question)) {
-    lines.push('建议面试追问：')
-    if (ctx.questions?.length) {
-      ctx.questions.slice(0, 4).forEach((q, idx) => lines.push(`${idx + 1}. ${q}`))
-    } else {
-      lines.push('1. 请讲一个你从 0 到 1 负责的线上项目，架构选型和你在其中的独立代码边界是什么？')
-      lines.push('2. 遇到线上报错、模型幻觉或效果不达预期时，你是如何定位并量化验证修复效果的？')
-      lines.push('3. 确认通勤与现场面试安排（奉贤区南上海科创中心）及期望薪资底线。')
-    }
-  } else {
-    lines.push('下一步建议：如确认可来奉贤现场技术面试，直接点左侧「发消息」使用标准要简历模板推进。')
-  }
-  return lines.join('\n')
+function safeFileBase(raw) {
+  return (
+    String(raw || '')
+      .replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 60) || 'candidate'
+  )
 }
 
-function localAnswer(question, pipeline, evalData, contextCandidate) {
-  if (
-    contextCandidate &&
-    (/此人|这位|这个|面试题|追问|深挖|分析|话术/.test(question) || question.includes(contextCandidate.name))
-  ) {
-    return localCandidateAnswer(question, contextCandidate)
-  }
-  const q = question.toLowerCase()
-  const byStage = pipeline.stats.byStage || {}
-  const total = pipeline.stats.total
-  const top = topCandidates(pipeline, 5)
-  const lines = []
-
-  const isFollowUp = /跟进|催|回复|没回|待回|消息/.test(question)
-  const isInterview = /约面|面试|安排|现场/.test(question)
-  const isXmt = /新媒体|内容|小红书|抖音/.test(question)
-  const isAi = /ai|agent|rag|技术|开发/.test(q)
-  const isCount = /多少|几个|人数|统计|阶段/.test(question)
-  const isWho = /谁|哪些|推荐|合适|优先/.test(question)
-
-  if (isCount) {
-    lines.push(`当前在库 ${total} 人：新线索 ${byStage.new || 0}、初筛通过 ${byStage.screened || 0}、短名单 ${byStage.shortlisted || 0}、已打招呼 ${byStage.greeted || 0}、已回复 ${byStage.replied || 0}、已约面 ${byStage.interview || 0}。`)
-    lines.push(`另有暂缓 ${byStage.hold || 0} 人、已淘汰 ${byStage.rejected || 0} 人。`)
-  }
-
-  if (isFollowUp) {
-    const waiting = pipeline.candidates
-      .filter((c) => ['greeted', 'replied'].includes(c.stage) || c.inferredStage === 'replied')
-      .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-      .slice(0, 6)
-    lines.push(waiting.length ? '建议今天先跟进这几位（最近有往来、还没定下一步）：' : '目前没有待跟进的人，打招呼的 4 位都还没回。')
-    for (const c of waiting) {
-      lines.push(`· ${c.name}｜${c.job}｜${stageLabel(c.stage, pipeline)}${c.lastTime ? `｜最后消息 ${c.lastTime}` : ''}`)
-    }
-  }
-
-  if (isInterview) {
-    const pool = pipeline.candidates
-      .filter((c) => ['shortlisted', 'screened', 'replied'].includes(c.stage) && (c.score || 0) >= 60)
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
-      .slice(0, 5)
-    lines.push(pool.length ? '可以约面的人选（分数 + 阶段都够）：' : '暂时没有够线的人，先把短名单补齐。')
-    for (const c of pool) {
-      lines.push(`· ${c.name}｜${c.score} 分｜${c.facts?.salary || '薪资未标'}｜${c.facts?.city || ''}`)
-    }
-    lines.push('约面前确认两件事：能否到奉贤现场、期望薪资是否在区间内。')
-  }
-
-  if (isXmt) {
-    const list = pipeline.candidates.filter((c) => c.positionId === 'xmt')
-    const withAi = list.filter((c) => (c.dimensions?.ai || 0) > 0)
-    lines.push(`新媒体运营在库 ${list.length} 人，其中 AI 工具维度有分的 ${withAi.length} 人，同时具备平台与 AI 信号的很少。`)
-    const best = [...list].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 4)
-    for (const c of best) lines.push(`· ${c.name}｜${c.score} 分｜${c.facts?.salary || ''}`)
-  }
-
-  if (isAi) {
-    const list = pipeline.candidates.filter((c) => c.positionId === 'ai-dev')
-    lines.push(`AI 应用开发在库 ${list.length} 人，短名单 ${list.filter((c) => c.stage === 'shortlisted').length} 人。`)
-    const best = [...list].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 4)
-    for (const c of best) lines.push(`· ${c.name}｜${c.score} 分｜${c.facts?.latestWork || ''}`)
-  }
-
-  if (!lines.length) {
-    lines.push(`现在有 ${total} 位候选人在库，其中 ${byStage.new || 0} 位还没打招呼。`)
-    lines.push('匹配分最高的几位：')
-    for (const c of top) lines.push(`· ${c.name}（${c.score} 分，${c.job}）— ${c.summary || ''}`)
-    if (evalData.candidates.length > 0) {
-      lines.push(`面试评估库里还有 ${evalData.candidates.length} 份做过深度评估的简历，可以切到「面试评估」按面试分排序。`)
-    }
-    if (isWho) lines.push('如果只想动最值得的 3 个人：优先短名单里分数最高、且薪资在区间内的。')
-  }
-
-  lines.push('')
-  lines.push('需要我直接起草打招呼话术，或把这批人拖到「进短名单」，说一声就行。')
-  return lines.join('\n')
+function normalizeSource(raw) {
+  const v = String(raw || '').trim().toLowerCase()
+  if (v === 'featured' || v === 'selected' || v === 'jingxuan' || v === '精选') return 'featured'
+  if (v === 'recommend' || v === '推荐') return 'recommend'
+  return 'message'
 }
 
-async function streamAssistant(req, res, body, pipeline, evalData) {
-  const images = Array.isArray(body.images) ? body.images.slice(0, 4) : []
-  const question = String(body.message || '').trim() || (images.length ? '请帮我分析这张图片中的内容。' : '')
-  const history = Array.isArray(body.history) ? body.history.slice(-8) : []
-  const contextCandidate = body.contextCandidate && typeof body.contextCandidate === 'object' ? body.contextCandidate : null
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  })
-  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-
-  const apiKey = process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY
-  const baseUrl =
-    process.env.OPENAI_BASE_URL ||
-    (process.env.DEEPSEEK_API_KEY ? 'https://api.deepseek.com/v1' : 'https://api.openai.com/v1')
-  const model = process.env.DESK_MODEL || (process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'gpt-4o-mini')
-
-  try {
-    if (apiKey) {
-      send('thinking', {
-        steps: contextCandidate ? ['读取当前候选人档案', '对照岗位与台账', '生成针对性建议'] : ['理解问题', '读取招聘台账', '生成建议'],
-      })
-      let enrichedFocused = contextCandidate
-      if (contextCandidate?.name) {
-        const localOnline = readLocalOnlineResume(contextCandidate.name)
-        if (localOnline.found && localOnline.text) {
-          enrichedFocused = { ...contextCandidate, onlineResumeExcerpt: localOnline.text.slice(0, 3000) }
-        }
-      }
-      const summary = {
-        total: pipeline.stats.total,
-        byStage: pipeline.stats.byStage,
-        bySource: pipeline.stats.bySource,
-        top: topCandidates(pipeline, 8).map((c) => ({
-          name: c.name,
-          job: c.job,
-          source: normalizeSource(c.source),
-          stage: c.stage,
-          score: c.score,
-          summary: c.summary,
-        })),
-        evalCount: evalData.candidates.length,
-        ...(enrichedFocused ? { focusedCandidate: enrichedFocused } : {}),
-      }
-      const userContent = images.length
-        ? [
-            { type: 'text', text: question },
-            ...images.map((img) => ({
-              type: 'image_url',
-              image_url: { url: `data:${img.mediaType || 'image/png'};base64,${img.data}` },
-            })),
-          ]
-        : question
-      const upstream = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          stream: true,
-          temperature: 0.4,
-          messages: [
-            {
-              role: 'system',
-              content:
-                '你是招聘助手，回答必须简短、具体、可执行，用中文，不用客套话。只依据给定数据，不要编造候选人。如提供了 focusedCandidate 或图片，请优先结合其内容给出判断与追问。',
-            },
-            { role: 'system', content: `当前台账摘要：${JSON.stringify(summary)}` },
-            ...history.map((m) => ({ role: m.role, content: m.content })),
-            { role: 'user', content: userContent },
-          ],
-        }),
-      })
-      if (!upstream.ok || !upstream.body) throw new Error(`上游模型返回 ${upstream.status}`)
-      const reader = upstream.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const parts = buffer.split('\n\n')
-        buffer = parts.pop() || ''
-        for (const part of parts) {
-          for (const line of part.split('\n')) {
-            if (!line.startsWith('data:')) continue
-            const payload = line.slice(5).trim()
-            if (!payload || payload === '[DONE]') continue
-            try {
-              const chunk = JSON.parse(payload)
-              const delta = chunk.choices?.[0]?.delta?.content
-              if (delta) send('delta', { text: delta })
-            } catch {
-              /* ignore keep-alive */
-            }
-          }
-        }
-      }
-    } else {
-      for (const step of LOCAL_STAGES) {
-        send('thinking', { steps: [step] })
-        await sleep(280 + Math.random() * 180)
-      }
-      const answer = localAnswer(question, pipeline, evalData, contextCandidate)
-      send('thinking', { steps: ['已完成'] })
-      for (const chunk of chunkText(answer)) {
-        send('delta', { text: chunk })
-        await sleep(18 + Math.random() * 26)
-      }
-    }
-    send('done', { ok: true })
-  } catch (error) {
-    send('error', { message: error.message || '生成失败' })
-  } finally {
-    res.end()
-  }
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-function chunkText(text) {
-  const out = []
-  for (let i = 0; i < text.length; i += 2) out.push(text.slice(i, i + 2))
-  return out
+function formatNow() {
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
 }
 
-/* ------------------------------------------------------------------ HTTP */
+function safeJoin(base, relative) {
+  const cleanRel = String(relative || '').replace(/^\/+/, '')
+  const resolvedBase = path.resolve(base)
+  const target = path.resolve(resolvedBase, cleanRel)
+  if (target === resolvedBase || target.startsWith(resolvedBase + path.sep)) return target
+  return null
+}
 
 function json(res, code, payload) {
-  const body = JSON.stringify(payload)
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
   })
-  res.end(body)
+  res.end(JSON.stringify(payload))
 }
 
-function readJson(req, maxBytes = 25 * 1024 * 1024) {
+function readJsonBody(req, maxBytes = 45 * 1024 * 1024) {
   return new Promise((resolve) => {
     const chunks = []
     let total = 0
@@ -464,21 +158,6 @@ function readJson(req, maxBytes = 25 * 1024 * 1024) {
   })
 }
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.pdf': 'application/pdf',
-  '.woff2': 'font/woff2',
-  '.ico': 'image/x-icon',
-}
-
 function serveFile(res, filePath) {
   if (!existsSync(filePath) || !statSync(filePath).isFile()) {
     res.writeHead(404)
@@ -497,20 +176,38 @@ function serveFile(res, filePath) {
   res.end(readFileSync(filePath))
 }
 
-function safeFileBase(raw) {
-  return (
-    String(raw || '')
-      .replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 60) || 'candidate'
-  )
-}
+/* ------------------------------------------------------------------ 本地简历扫描 */
 
-function normalizeSource(raw) {
-  const v = String(raw || '').trim().toLowerCase()
-  if (v === 'featured' || v === 'selected' || v === 'jingxuan' || v === '精选') return 'featured'
-  if (v === 'recommend' || v === '推荐') return 'recommend'
-  return 'message'
+function scanLocalResumeMaps() {
+  const pdfByName = new Map()
+  const onlineByName = new Map()
+
+  if (existsSync(RESUME_PDF_DIR)) {
+    const files = readdirSync(RESUME_PDF_DIR)
+      .filter((f) => f.toLowerCase().endsWith('.pdf'))
+      .map((f) => ({ f, mtime: statSync(path.join(RESUME_PDF_DIR, f)).mtimeMs }))
+      .sort((a, b) => a.mtime - b.mtime)
+    for (const { f } of files) {
+      const base = f.replace(/\.pdf$/i, '')
+      const key = base.replace(/-\d{10,}$/, '').trim()
+      if (key) {
+        pdfByName.set(key, f)
+        pdfByName.set(safeFileBase(key), f)
+      }
+    }
+  }
+
+  if (existsSync(RESUME_ONLINE_DIR)) {
+    for (const f of readdirSync(RESUME_ONLINE_DIR)) {
+      if (!f.toLowerCase().endsWith('.json')) continue
+      const key = f.replace(/\.json$/i, '').trim()
+      if (key) {
+        onlineByName.set(key, f)
+        onlineByName.set(safeFileBase(key), f)
+      }
+    }
+  }
+  return { pdfByName, onlineByName }
 }
 
 function listLocalPdfResumes() {
@@ -597,50 +294,394 @@ function readLocalOnlineResume(candidateName, explicitFile = '') {
   return { found: false, candidate: candidateName || '' }
 }
 
-function tryParseJson(raw) {
-  if (!raw) return null
-  const trimmed = String(raw).trim()
-  try {
-    return JSON.parse(trimmed)
-  } catch {
-    const idx = Math.max(trimmed.lastIndexOf('\n{'), trimmed.lastIndexOf('\n['))
-    if (idx >= 0) {
-      try {
-        return JSON.parse(trimmed.slice(idx + 1))
-      } catch {
-        return null
+/* ------------------------------------------------------------------ 数据聚合（支持空初始化 + 实时读取 ~/.boss-cli） */
+
+function readSourcingSnapshots() {
+  if (!existsSync(SOURCING_DIR)) return []
+  const out = []
+  for (const file of readdirSync(SOURCING_DIR)) {
+    if (!file.endsWith('.json')) continue
+    const snap = safeReadJson(path.join(SOURCING_DIR, file))
+    if (!snap || !Array.isArray(snap.candidates)) continue
+    const tab = normalizeSource(snap.tab)
+    for (const c of snap.candidates) {
+      if (!c?.name) continue
+      out.push({
+        ...c,
+        sourceTab: tab,
+        job: snap.job || '默认岗位',
+        fetchedAt: snap.fetchedAt || '',
+      })
+    }
+  }
+  return out
+}
+
+function readEvalData() {
+  // 1) 优先读取标准用户目录 ~/.boss-cli/eval/data.json（供 WorkBuddy 等 Agent 直接写入）
+  const userEvalJson = path.join(LOCAL_EVAL_DIR, 'data.json')
+  if (existsSync(userEvalJson)) {
+    const parsed = safeReadJson(userEvalJson)
+    if (parsed && Array.isArray(parsed.candidates)) {
+      return {
+        meta: parsed.meta || { total: parsed.candidates.length },
+        positions: Array.isArray(parsed.positions) ? parsed.positions : [],
+        statusMeta: parsed.statusMeta,
+        candidates: parsed.candidates,
       }
     }
-    return null
+  }
+  // 2) 兼容本机已有 web/data.js（开发机本地保留的 152 份评估）
+  const repoEvalJs = path.join(ROOT, 'web', 'data.js')
+  if (existsSync(repoEvalJs)) {
+    try {
+      const text = readFileSync(repoEvalJs, 'utf8')
+      const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
+      if (parsed && Array.isArray(parsed.candidates)) return parsed
+    } catch {
+      /* ignore */
+    }
+  }
+  // 3) 全新电脑默认为空
+  return { meta: { total: 0 }, positions: [], candidates: [] }
+}
+
+function readQuota() {
+  const raw = safeReadJson(path.join(BOSS_HOME, 'quota.json'))
+  const today = new Date()
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const counts = raw && raw.date === todayKey && raw.counts ? raw.counts : {}
+  const limits = { greet: 20, send: 40, preview: 30 }
+  const quotas = {}
+  for (const [k, limit] of Object.entries(limits)) {
+    const used = Number(counts[k] || 0)
+    quotas[k] = { used, limit }
+  }
+  return { date: todayKey, mode: 'agent-cli', quotas }
+}
+
+function synthesizePipelineFromBossHome(evalData) {
+  const tracker = safeReadJson(path.join(BOSS_HOME, 'tracker.json'), { candidates: {} })
+  const inspect = safeReadJson(path.join(BOSS_HOME, 'unread-inspect.json'), { candidates: [] })
+  const sourcing = readSourcingSnapshots()
+  const { pdfByName, onlineByName } = scanLocalResumeMaps()
+
+  const inspectByName = new Map()
+  for (const c of inspect?.candidates || []) {
+    if (c?.name) inspectByName.set(String(c.name).trim(), c)
+  }
+
+  const evalByName = new Map()
+  const evalPdfByName = new Map()
+  for (const e of evalData?.candidates || []) {
+    if (e?.name) {
+      evalByName.set(e.name, e.id)
+      if (e.pdf) evalPdfByName.set(e.name, e.pdf)
+    }
+  }
+
+  const resolvePdf = (name, t) => {
+    if (t?.resumePdfPath && existsSync(t.resumePdfPath)) return path.basename(t.resumePdfPath)
+    return pdfByName.get(name) || pdfByName.get(safeFileBase(name)) || ''
+  }
+  const resolveOnline = (name, t) => {
+    if (t?.onlineResumePath && existsSync(t.onlineResumePath)) return path.basename(t.onlineResumePath)
+    return onlineByName.get(name) || onlineByName.get(safeFileBase(name)) || ''
+  }
+
+  const posMap = new Map()
+  const candidates = []
+  const seenKeys = new Set()
+
+  const ensurePos = (job) => {
+    const clean = String(job || '默认岗位').trim() || '默认岗位'
+    const id = clean.toLowerCase().replace(/\s+/g, '-')
+    if (!posMap.has(id)) {
+      posMap.set(id, { id, name: clean, short: clean.slice(0, 10) })
+    }
+    return id
+  }
+
+  for (const t of Object.values(tracker?.candidates || {})) {
+    const name = String(t.name || '').trim()
+    if (!name) continue
+    const ins = inspectByName.get(name)
+    const job = t.job || ins?.job || '默认岗位'
+    seenKeys.add(`${name}::${job}`)
+    const posId = ensurePos(job)
+    const avatarFile = ins?.avatarLocalPath ? path.basename(ins.avatarLocalPath) : ''
+    const messages = Array.isArray(ins?.recentMessages) ? ins.recentMessages.slice(-8) : []
+    candidates.push({
+      id: t.id || `cand:${name}::${job}`,
+      geekId: t.geekId || '',
+      name,
+      job,
+      positionId: posId,
+      stage: ALLOWED_STAGES.has(t.stage) ? t.stage : 'screened',
+      inferredStage: '',
+      score: typeof t.score === 'number' ? t.score : undefined,
+      summary: t.summary || ins?.summary || '',
+      reason: t.reason || '',
+      avatar: avatarFile || undefined,
+      hasResumeImage: Boolean(ins?.friendImageLocalPaths?.length),
+      source: normalizeSource(t.source),
+      activeStatus: t.activeStatus || '',
+      canGreet: t.canGreet,
+      hasViewed: Boolean(t.hasViewed || t.onlineResumePath || t.resumeTextPath),
+      resumePdfFile: resolvePdf(name, t),
+      evalPdfPath: evalPdfByName.get(name) || '',
+      onlineResumeFile: resolveOnline(name, t),
+      resumeScreenshotFile: t.resumeScreenshotPath ? path.basename(t.resumeScreenshotPath) : '',
+      evalId: evalByName.get(name) || '',
+      facts: {
+        age: ins?.age || undefined,
+        exp: ins?.experience || undefined,
+        edu: ins?.education || undefined,
+        city: ins?.city || undefined,
+        salary: ins?.salary || undefined,
+        latestWork: ins?.latestWork || undefined,
+      },
+      messages,
+      lastText: ins?.lastMessage || messages.at(-1)?.text || '',
+      lastTime: ins?.lastTime || t.activeStatus || '',
+      unread: Number(ins?.unread || 0),
+      updatedAt: t.updatedAt || new Date().toISOString(),
+      history: Array.isArray(t.history) ? t.history : [],
+    })
+  }
+
+  for (const [name, ins] of inspectByName.entries()) {
+    const job = ins.job || '未读线索'
+    if (seenKeys.has(`${name}::${job}`)) continue
+    seenKeys.add(`${name}::${job}`)
+    const posId = ensurePos(job)
+    const avatarFile = ins.avatarLocalPath ? path.basename(ins.avatarLocalPath) : ''
+    const messages = Array.isArray(ins.recentMessages) ? ins.recentMessages.slice(-8) : []
+    candidates.push({
+      id: `unread:${name}::${job}`,
+      geekId: '',
+      name,
+      job,
+      positionId: posId,
+      stage: 'new',
+      inferredStage: '',
+      summary: ins.summary || ins.lastMessage || '',
+      reason: '',
+      avatar: avatarFile || undefined,
+      hasResumeImage: Boolean(ins.friendImageLocalPaths?.length),
+      source: 'message',
+      resumePdfFile: resolvePdf(name, null),
+      evalPdfPath: evalPdfByName.get(name) || '',
+      onlineResumeFile: resolveOnline(name, null),
+      evalId: evalByName.get(name) || '',
+      facts: {
+        age: ins.age || undefined,
+        exp: ins.experience || undefined,
+        edu: ins.education || undefined,
+        city: ins.city || undefined,
+        salary: ins.salary || undefined,
+        latestWork: ins.latestWork || undefined,
+      },
+      messages,
+      lastText: ins.lastMessage || messages.at(-1)?.text || '',
+      lastTime: ins.lastTime || '',
+      unread: Number(ins.unread || 0),
+      updatedAt: ins.inspectedAt || new Date().toISOString(),
+    })
+  }
+
+  for (const s of sourcing) {
+    const name = String(s.name || '').trim()
+    const job = s.job || '默认岗位'
+    if (!name || seenKeys.has(`${name}::${job}`)) continue
+    seenKeys.add(`${name}::${job}`)
+    const posId = ensurePos(job)
+    const summaryParts = [
+      ...String(s.baseInfo || '').split('/').map((x) => x.trim()).filter(Boolean),
+      s.expect || '',
+      s.salary || '',
+      s.experience ? String(s.experience).split('；')[0]?.trim() || '' : '',
+    ].filter(Boolean)
+    candidates.push({
+      id: s.geekId ? `geek:${s.geekId}` : `sourcing:${s.sourceTab}:${name}::${job}`,
+      geekId: s.geekId || '',
+      name,
+      job,
+      positionId: posId,
+      stage: s.canGreet === false ? 'greeted' : 'new',
+      inferredStage: '',
+      summary: summaryParts.join('｜'),
+      reason: s.advantage || (s.highlights?.length ? `优势：${s.highlights.slice(0, 4).join('、')}` : ''),
+      highlights: Array.isArray(s.highlights) ? s.highlights.slice(0, 4) : [],
+      source: normalizeSource(s.sourceTab),
+      activeStatus: s.activeStatus || '',
+      canGreet: s.canGreet !== false,
+      hasViewed: Boolean(s.hasViewed),
+      resumePdfFile: resolvePdf(name, null),
+      evalPdfPath: evalPdfByName.get(name) || '',
+      onlineResumeFile: resolveOnline(name, null),
+      evalId: evalByName.get(name) || '',
+      facts: {},
+      messages: [],
+      lastTime: s.activeStatus || '',
+      updatedAt: s.fetchedAt || new Date().toISOString(),
+    })
+  }
+
+  // 把 ~/.boss-cli/resumes/pdf/ 里尚未录入 tracker 的独立 PDF 简历也按文件名自动展示出来
+  for (const [candidateName, pdfFile] of pdfByName.entries()) {
+    // 跳过 safeFileBase 重复键（仅处理未见过的候选人）
+    const alreadyExists = candidates.some((c) => c.name === candidateName || safeFileBase(c.name) === candidateName)
+    if (alreadyExists) continue
+    const posId = ensurePos('本地简历')
+    candidates.push({
+      id: `pdf:${candidateName}`,
+      name: candidateName,
+      job: '本地简历',
+      positionId: posId,
+      stage: 'new',
+      inferredStage: '',
+      summary: '已导入本地 PDF 简历，等待评估',
+      reason: '',
+      source: 'message',
+      resumePdfFile: pdfFile,
+      onlineResumeFile: resolveOnline(candidateName, null),
+      evalId: evalByName.get(candidateName) || '',
+      facts: {},
+      messages: [],
+      updatedAt: new Date().toISOString(),
+    })
+  }
+
+  const byStage = Object.fromEntries(STAGE_META.map((s) => [s.key, 0]))
+  const byJob = {}
+  const bySource = { message: 0, recommend: 0, featured: 0 }
+  const byJobAndSource = {}
+  const startOfDay = new Date()
+  startOfDay.setHours(0, 0, 0, 0)
+  let todayNew = 0
+
+  for (const c of candidates) {
+    const src = normalizeSource(c.source)
+    byStage[c.stage] = (byStage[c.stage] || 0) + 1
+    byJob[c.positionId] = (byJob[c.positionId] || 0) + 1
+    bySource[src] = (bySource[src] || 0) + 1
+    if (!byJobAndSource[c.positionId]) byJobAndSource[c.positionId] = { message: 0, recommend: 0, featured: 0 }
+    byJobAndSource[c.positionId][src] = (byJobAndSource[c.positionId][src] || 0) + 1
+    if (c.updatedAt && new Date(c.updatedAt) >= startOfDay) todayNew += 1
+  }
+
+  return {
+    meta: {
+      product: '招聘助手',
+      generatedAt: formatNow(),
+      generatedAtISO: new Date().toISOString(),
+      stageMeta: STAGE_META,
+      positions: [...posMap.values()],
+    },
+    stats: {
+      total: candidates.length,
+      byStage,
+      byJob,
+      bySource,
+      byJobAndSource,
+      todayNew,
+      awaitingReply: (byStage.greeted || 0) + (byStage.shortlisted || 0),
+      quota: readQuota(),
+    },
+    candidates,
   }
 }
 
-function safeJoin(base, relative) {
-  const target = path.resolve(base, relative)
-  return target.startsWith(path.resolve(base)) ? target : null
+function loadData() {
+  const evalData = readEvalData()
+  const pipelineFile = path.join(ROOT, 'web', 'pipeline.json')
+  let pipeline = null
+  if (existsSync(pipelineFile)) {
+    const parsed = safeReadJson(pipelineFile)
+    if (parsed && Array.isArray(parsed.candidates)) {
+      // 实时补挂本地新放入的 PDF / 在线简历，无需每次重跑 build.mjs
+      const { pdfByName, onlineByName } = scanLocalResumeMaps()
+      for (const c of parsed.candidates) {
+        if (!c.resumePdfFile) {
+          c.resumePdfFile = pdfByName.get(c.name) || pdfByName.get(safeFileBase(c.name)) || ''
+        }
+        if (!c.onlineResumeFile) {
+          c.onlineResumeFile = onlineByName.get(c.name) || onlineByName.get(safeFileBase(c.name)) || ''
+        }
+      }
+      pipeline = parsed
+    }
+  }
+  if (!pipeline) {
+    pipeline = synthesizePipelineFromBossHome(evalData)
+  }
+  return { pipeline, evalData, quota: readQuota() }
+}
+
+/* ------------------------------------------------------------------ SSE 实时文件监听 */
+
+const sseClients = new Set()
+let notifyTimer = null
+
+function broadcastReload(reason = 'change') {
+  if (notifyTimer) clearTimeout(notifyTimer)
+  notifyTimer = setTimeout(() => {
+    const payload = `event: update\ndata: ${JSON.stringify({ at: Date.now(), reason })}\n\n`
+    for (const res of sseClients) {
+      if (!res.writableEnded) res.write(payload)
+    }
+  }, 350)
+}
+
+function setupWatchers() {
+  const dirsToWatch = [
+    BOSS_HOME,
+    RESUME_PDF_DIR,
+    RESUME_ONLINE_DIR,
+    SOURCING_DIR,
+    LOCAL_EVAL_DIR,
+    ...(existsSync(path.join(ROOT, 'web')) ? [path.join(ROOT, 'web')] : []),
+  ]
+  for (const dir of dirsToWatch) {
+    if (!existsSync(dir)) continue
+    try {
+      watch(dir, { persistent: false }, (_event, filename) => {
+        if (filename && String(filename).startsWith('.')) return
+        broadcastReload(`${path.basename(dir)}/${filename || ''}`)
+      })
+    } catch {
+      /* 某些系统/虚拟文件系统可能不支持 watch，仍可手动刷新 */
+    }
+  }
+}
+
+setupWatchers()
+
+/* ------------------------------------------------------------------ HTTP 服务 */
+
+function isLoopbackOrigin(req) {
+  const origin = req.headers.origin
+  if (!origin) return true
+  try {
+    const host = new URL(origin).hostname
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'
+  } catch {
+    return false
+  }
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://127.0.0.1:${PORT}`)
+  const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`)
   const pathname = decodeURIComponent(url.pathname)
 
-  // 只接受本机来源，拒绝跨站写请求
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    const origin = req.headers.origin
-    if (origin) {
-      try {
-        const host = new URL(origin).hostname
-        if (!['127.0.0.1', 'localhost'].includes(host)) {
-          return json(res, 403, { error: '仅允许本机访问' })
-        }
-      } catch {
-        return json(res, 403, { error: '非法来源' })
-      }
-    }
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !isLoopbackOrigin(req)) {
+    return json(res, 403, { error: '仅允许本机访问' })
   }
 
+  // 本地静态媒体（头像 / 评估简历页 / PDF 简历 / 在线简历截图）
   if (pathname.startsWith('/media/avatars/')) {
-    const rel = pathname.replace('/media/avatars/', '')
+    const rel = pathname.slice('/media/avatars/'.length)
     for (const base of AVATAR_DIRS) {
       const file = safeJoin(base, rel)
       if (file && existsSync(file)) return serveFile(res, file)
@@ -648,12 +689,16 @@ const server = createServer(async (req, res) => {
     return json(res, 404, { error: 'not found' })
   }
   if (pathname.startsWith('/media/eval/')) {
-    const file = safeJoin(EVAL_ASSETS, pathname.replace('/media/eval/', ''))
-    return file ? serveFile(res, file) : json(res, 400, { error: 'bad path' })
+    const rel = pathname.slice('/media/eval/'.length)
+    for (const base of EVAL_ASSET_DIRS) {
+      const file = safeJoin(base, rel)
+      if (file && existsSync(file)) return serveFile(res, file)
+    }
+    return json(res, 404, { error: 'not found' })
   }
   if (pathname.startsWith('/media/resumes/pdf/')) {
     const rel = pathname.slice('/media/resumes/pdf/'.length)
-    for (const base of [RESUME_PDF_DIR, ...EVAL_PDF_DIRS]) {
+    for (const base of EVAL_PDF_DIRS) {
       const file = safeJoin(base, rel)
       if (file && existsSync(file) && statSync(file).isFile()) return serveFile(res, file)
     }
@@ -665,146 +710,38 @@ const server = createServer(async (req, res) => {
     return file && existsSync(file) ? serveFile(res, file) : json(res, 404, { error: 'not found' })
   }
 
+  // API 路由（只读展示 + SSE 监听 + 安全检查更新）
   if (pathname.startsWith('/api/')) {
-    if (pathname === '/api/ping') return json(res, 200, { ok: true })
-
-    if (pathname === '/api/doctor') {
-      const force = url.searchParams.get('refresh') === '1'
-      const status = await checkSafariDoctor(force)
-      return json(res, 200, status)
-    }
-
-    if (pathname === '/api/models') {
-      const info = currentModelInfo()
-      return json(res, 200, {
-        runtime: 'standalone',
-        current: info.modelMode === 'llm' ? { provider: 'env', model: info.modelName } : null,
-        providers: [],
-      })
+    if (pathname === '/api/ping') {
+      const { currentVersion } = readAppVersionInfo(ROOT)
+      return json(res, 200, { ok: true, mode: 'static-desk', version: currentVersion })
     }
 
     if (pathname === '/api/data') {
-      const force = url.searchParams.get('refresh') === '1'
-      const data = loadData(force)
-      return json(res, 200, {
-        pipeline: data.pipeline,
-        evalData: data.evalData,
-        quota: readQuota(),
+      return json(res, 200, loadData())
+    }
+
+    if (pathname === '/api/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
       })
-    }
-
-    if (pathname === '/api/refresh' && req.method === 'POST') {
-      try {
-        await execFileAsync(process.execPath, [path.join(ROOT, 'web', 'build.mjs')], {
-          cwd: ROOT,
-          timeout: 180_000,
-        })
-      } catch (error) {
-        return json(res, 500, { error: `重建数据失败：${error.message}` })
-      }
-      const data = loadData(true)
-      return json(res, 200, { pipeline: data.pipeline, quota: readQuota() })
-    }
-
-    if (pathname === '/api/stage' && req.method === 'POST') {
-      const body = await readJson(req)
-      const name = String(body.name || '').trim()
-      const stage = String(body.stage || '').trim()
-      const job = String(body.job || '').trim()
-      const score = Number(body.score)
-      if (!name || !stage) return json(res, 400, { error: '缺少姓名或阶段' })
-      const allowed = ['new', 'screened', 'shortlisted', 'greeted', 'replied', 'interview', 'hold', 'rejected']
-      if (!allowed.includes(stage)) return json(res, 400, { error: '未知阶段' })
-      const args = ['tracker', 'upsert', '--name', name, '--job', job || '未标注', '--stage', stage]
-      if (Number.isFinite(score)) args.push('--score', String(Math.round(score)))
-      args.push('--summary', '页面调整阶段', '--reason', '招聘助手 · 简历筛选', '--json')
-      try {
-        await bossCli(args)
-      } catch (error) {
-        return json(res, 500, { error: `写入台账失败：${error.stderr || error.message}` })
-      }
-      try {
-        const data = await rebuildPipeline()
-        return json(res, 200, { ok: true, pipeline: data.pipeline, quota: readQuota() })
-      } catch (error) {
-        return json(res, 500, { error: `重建台账失败：${error.message}` })
-      }
-    }
-
-    if (pathname === '/api/send' && req.method === 'POST') {
-      const body = await readJson(req)
-      const name = String(body.name || '').trim()
-      const text = String(body.text || '').trim()
-      if (!name || !text) return json(res, 400, { error: '缺少收件人或内容' })
-      if (text.length > 800) return json(res, 400, { error: '消息超过 800 字' })
-      const quota = readQuota()
-      const sendQuota = quota?.quotas?.send
-      if (sendQuota && sendQuota.used >= sendQuota.limit) {
-        return json(res, 429, { error: '今日发送额度已用完' })
-      }
-      try {
-        const { stdout } = await bossCli([
-          'send', '--to', name, '--strict', '-t', text, '--confirm', '--json',
-        ])
-        const data = await rebuildPipeline()
-        return json(res, 200, {
-          ok: true,
-          result: stdout.slice(-2000),
-          quota: readQuota(),
-          pipeline: data.pipeline,
-        })
-      } catch (error) {
-        return json(res, 500, { error: `发送失败：${error.stderr || error.message}` })
-      }
+      res.write(`event: ready\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`)
+      sseClients.add(res)
+      const heartbeat = setInterval(() => {
+        if (!res.writableEnded) res.write(': ping\n\n')
+      }, 25_000)
+      req.on('close', () => {
+        clearInterval(heartbeat)
+        sseClients.delete(res)
+      })
+      return
     }
 
     if (pathname === '/api/resume/pdfs' && req.method === 'GET') {
       return json(res, 200, { files: listLocalPdfResumes() })
-    }
-
-    if (pathname === '/api/resume/upload-pdf' && req.method === 'POST') {
-      const body = await readJson(req, 30 * 1024 * 1024)
-      const candidateName = String(body.name || '').trim()
-      const jobVal = String(body.job || '').trim()
-      const geekIdVal = String(body.geekId || '').trim()
-      const sourceVal = body.source ? normalizeSource(body.source) : ''
-      let rawBase64 = String(body.dataBase64 || '').trim()
-      if (!candidateName || !rawBase64) {
-        return json(res, 400, { error: '缺少候选人姓名或 PDF 文件数据' })
-      }
-      if (rawBase64.startsWith('data:')) {
-        const m = /^data:[^;]+;base64,(.+)$/s.exec(rawBase64)
-        if (m) rawBase64 = m[1]
-      }
-      const buf = Buffer.from(rawBase64.replace(/\s+/g, ''), 'base64')
-      if (buf.length < 10 || buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
-        return json(res, 400, { error: '上传文件不是有效的 PDF 格式（缺少 %PDF- 文件头）' })
-      }
-      if (buf.length > 25 * 1024 * 1024) {
-        return json(res, 413, { error: 'PDF 文件超过 25MB 限制' })
-      }
-      mkdirSync(RESUME_PDF_DIR, { recursive: true })
-      const pdfFile = `${safeFileBase(candidateName)}-${Date.now()}.pdf`
-      const pdfAbsPath = path.join(RESUME_PDF_DIR, pdfFile)
-      writeFileSync(pdfAbsPath, buf)
-      const cliArgs = ['tracker', 'upsert', '--name', candidateName, '--resume-pdf', pdfAbsPath, '--json']
-      if (jobVal) cliArgs.push('--job', jobVal)
-      if (geekIdVal) cliArgs.push('--geek-id', geekIdVal)
-      if (sourceVal) cliArgs.push('--source', sourceVal)
-      try {
-        await bossCli(cliArgs)
-        await rebuildPipeline()
-      } catch {
-        /* PDF 已落盘 */
-      }
-      const data = loadData(true)
-      return json(res, 200, {
-        ok: true,
-        pdfFile,
-        pdfUrl: `/media/resumes/pdf/${encodeURIComponent(pdfFile)}`,
-        pdfPath: pdfAbsPath,
-        pipeline: data.pipeline,
-      })
     }
 
     if (pathname === '/api/resume/online' && req.method === 'GET') {
@@ -814,125 +751,12 @@ const server = createServer(async (req, res) => {
       return json(res, 200, readLocalOnlineResume(candidateName, explicitFile))
     }
 
-    if (pathname === '/api/resume/fetch' && req.method === 'POST') {
-      const body = await readJson(req)
-      const candidateName = String(body.name || '').trim()
-      const geekIdVal = String(body.geekId || '').trim()
-      const jobVal = String(body.job || '').trim()
-      const sourceVal = normalizeSource(body.source)
-      const screenshot = Boolean(body.screenshot)
-      if (!candidateName && !geekIdVal) return json(res, 400, { error: '缺少候选人姓名或 geekId' })
-      const quota = readQuota()
-      const previewQuota = quota?.quotas?.preview
-      if (previewQuota && previewQuota.used >= previewQuota.limit) {
-        return json(res, 429, { error: '今日在线简历查看额度已用完' })
-      }
-      try {
-        let stdout = ''
-        if (sourceVal === 'recommend' || sourceVal === 'featured') {
-          const args = ['preview']
-          if (candidateName) args.push(candidateName)
-          if (geekIdVal) args.push('--geek-id', geekIdVal)
-          args.push('--tab', sourceVal)
-          if (jobVal) args.push('--job', jobVal)
-          if (screenshot) args.push('--screenshot')
-          args.push('--json')
-          stdout = (await bossCli(args)).stdout
-        } else {
-          await bossCli(['chat', candidateName, '--strict', '--json'])
-          const args = ['action', 'resume', '--json']
-          if (screenshot) args.push('--screenshot')
-          stdout = (await bossCli(args)).stdout
-        }
-        const parsed = tryParseJson(stdout)
-        const data = await rebuildPipeline()
-        const savedFile = parsed?.onlineResumePath ? path.basename(parsed.onlineResumePath) : ''
-        const resume = readLocalOnlineResume(candidateName, savedFile)
-        return json(res, 200, {
-          ok: true,
-          resume,
-          raw: parsed,
-          quota: readQuota(),
-          pipeline: data.pipeline,
-        })
-      } catch (error) {
-        return json(res, 500, { error: `从 Boss 读取在线简历失败：${error.stderr || error.message}` })
-      }
-    }
-
-    if (pathname === '/api/sourcing/sync' && req.method === 'POST') {
-      const body = await readJson(req)
-      const rawTab = String(body.tab || '').trim().toLowerCase()
-      if (rawTab !== 'recommend' && rawTab !== 'featured') {
-        return json(res, 400, {
-          error: '仅支持从「推荐牛人 (recommend)」或「精选牛人 (featured)」拉取，暂不包含「最新」。',
-        })
-      }
-      const jobVal = String(body.job || '').trim()
-      const limit = Math.max(1, Math.min(50, Number(body.limit) || 20))
-      const cliArgs = ['recommend']
-      if (jobVal && jobVal !== 'all') cliArgs.push(jobVal)
-      cliArgs.push('--tab', rawTab, '--limit', String(limit), '--sync-tracker', '--json')
-      if (body.skipViewed !== false) cliArgs.push('--skip-viewed')
-      if (body.skipColleague !== false) cliArgs.push('--skip-colleague')
-      try {
-        const { stdout } = await bossCli(cliArgs)
-        const parsed = tryParseJson(stdout)
-        const data = await rebuildPipeline()
-        return json(res, 200, {
-          ok: true,
-          tab: rawTab,
-          job: parsed?.job || jobVal || '',
-          count: Array.isArray(parsed?.candidates) ? parsed.candidates.length : 0,
-          fetched: parsed,
-          pipeline: data.pipeline,
-          quota: readQuota(),
-        })
-      } catch (error) {
-        return json(res, 500, {
-          error: `拉取${rawTab === 'featured' ? '精选牛人' : '推荐牛人'}失败：${error.stderr || error.message}`,
-        })
-      }
-    }
-
-    if (pathname === '/api/greet' && req.method === 'POST') {
-      const body = await readJson(req)
-      const candidateName = String(body.name || '').trim()
-      const geekIdVal = String(body.geekId || '').trim()
-      const jobVal = String(body.job || '').trim()
-      const rawTab = String(body.tab || '').trim().toLowerCase()
-      if (!candidateName && !geekIdVal) return json(res, 400, { error: '缺少候选人姓名或 geekId' })
-      const quota = readQuota()
-      const greetQuota = quota?.quotas?.greet
-      if (greetQuota && greetQuota.used >= greetQuota.limit) {
-        return json(res, 429, { error: '今日打招呼额度已用完' })
-      }
-      const cliArgs = ['greet']
-      if (candidateName) cliArgs.push(candidateName)
-      if (geekIdVal) cliArgs.push('--geek-id', geekIdVal)
-      if (jobVal) cliArgs.push('--job', jobVal)
-      if (rawTab === 'recommend' || rawTab === 'featured') cliArgs.push('--tab', rawTab)
-      cliArgs.push('--confirm', '--json')
-      try {
-        const { stdout } = await bossCli(cliArgs)
-        const data = await rebuildPipeline()
-        return json(res, 200, {
-          ok: true,
-          result: tryParseJson(stdout) || stdout.slice(-2000),
-          quota: readQuota(),
-          pipeline: data.pipeline,
-        })
-      } catch (error) {
-        return json(res, 500, { error: `打招呼失败：${error.stderr || error.message}` })
-      }
-    }
-
     if (pathname === '/api/update/status' && req.method === 'GET') {
       return json(res, 200, getUpdateStatus(ROOT))
     }
 
     if (pathname === '/api/update/config' && req.method === 'POST') {
-      const body = await readJson(req)
+      const body = await readJsonBody(req)
       saveUpdateConfig({
         ...(body.sourceUrl !== undefined ? { sourceUrl: body.sourceUrl } : {}),
         ...(body.githubRepo !== undefined ? { githubRepo: body.githubRepo } : {}),
@@ -942,7 +766,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (pathname === '/api/update/check' && req.method === 'POST') {
-      const body = await readJson(req)
+      const body = await readJsonBody(req)
       try {
         const result = await checkForUpdate(ROOT, body)
         return json(res, 200, result)
@@ -955,7 +779,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (pathname === '/api/update/install' && req.method === 'POST') {
-      const body = await readJson(req)
+      const body = await readJsonBody(req)
       try {
         const result = await downloadAndInstallUpdate(ROOT, body)
         return json(res, 200, result)
@@ -965,7 +789,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (pathname === '/api/update/upload' && req.method === 'POST') {
-      const body = await readJson(req, 45 * 1024 * 1024)
+      const body = await readJsonBody(req, 45 * 1024 * 1024)
       try {
         const result = installUpdateFromBase64(ROOT, body)
         return json(res, 200, result)
@@ -983,30 +807,22 @@ const server = createServer(async (req, res) => {
       return
     }
 
-    if (pathname === '/api/assistant' && req.method === 'POST') {
-      const body = await readJson(req)
-      const data = loadData(false)
-      return streamAssistant(req, res, body, data.pipeline, data.evalData)
-    }
-
     return json(res, 404, { error: 'not found' })
   }
 
-  // 静态资源：desk/dist
+  // 静态前端资源：desk/dist
   if (pathname === '/' || pathname === '/index.html') {
     return serveFile(res, path.join(DIST, 'index.html'))
   }
   const asset = safeJoin(DIST, pathname.slice(1))
   if (asset && existsSync(asset) && statSync(asset).isFile()) return serveFile(res, asset)
-  // SPA 回退
   return serveFile(res, path.join(DIST, 'index.html'))
 })
 
 server.listen(PORT, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${PORT}`
   console.log(`招聘助手 · ${url}`)
-  console.log('  账号：无（本机直接使用，数据共用）')
-  console.log(`  模型：${process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY ? '已配置，走真实模型' : '未配置密钥，使用本地数据助手'}`)
+  console.log(`  本地数据目录：${BOSS_HOME}（实时监听变化自动刷新）`)
   if (process.argv.includes('--open')) {
     spawn('open', [url], { detached: true, stdio: 'ignore' }).unref()
   }

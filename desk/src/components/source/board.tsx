@@ -1,20 +1,4 @@
-import { useState } from 'react'
-import {
-  DndContext,
-  DragOverlay,
-  KeyboardSensor,
-  PointerSensor,
-  closestCorners,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DragStartEvent,
-} from '@dnd-kit/core'
-import { motion } from 'motion/react'
 import { FileText, Globe, ImageIcon, Sparkles } from 'lucide-react'
-import { toast } from 'sonner'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -33,10 +17,10 @@ import {
   tierBadge,
   tintFor,
 } from '@/lib/format'
-import { useDesk } from '@/store/desk'
-import type { Candidate, Pipeline, Stage } from '@/types'
 import { cn } from '@/lib/utils'
+import type { Candidate, Pipeline, Stage } from '@/types'
 
+/** 纯只读阶段看板（阶段更新由左侧 Agent 写入 ~/.boss-cli/tracker.json 后实时同步） */
 export function Board({
   candidates,
   pipeline,
@@ -48,74 +32,25 @@ export function Board({
   selectedId: string | null
   onOpen: (id: string) => void
 }) {
-  const [activeId, setActiveId] = useState<string | null>(null)
-  const moveStage = useDesk((s) => s.moveStage)
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor),
-  )
-
-  const active = candidates.find((c) => c.id === activeId) || null
-
-  const onStart = (event: DragStartEvent) => setActiveId(String(event.active.id))
-
-  const onEnd = async (event: DragEndEvent) => {
-    setActiveId(null)
-    const over = event.over?.id
-    if (!over) return
-    const target = String(over).replace('stage:', '') as Stage
-    const candidate = candidates.find((c) => c.id === String(event.active.id))
-    if (!candidate || candidate.stage === target) return
-
-    try {
-      const previous = await moveStage(candidate, target)
-      const latest = useDesk.getState().pipeline?.candidates.find((c) => c.id === candidate.id)
-      toast.success(`${candidate.name} → ${STAGE_LABEL[target]}`, {
-        duration: 6000,
-        action: {
-          label: '撤销',
-          onClick: () => {
-            if (latest) void moveStage(latest, previous)
-          },
-        },
-      })
-    } catch (error) {
-      toast.error((error as Error).message || '改阶段失败')
-    }
-  }
-
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCorners}
-      onDragStart={onStart}
-      onDragEnd={onEnd}
-      onDragCancel={() => setActiveId(null)}
-    >
-      <div className="relative h-full">
-        <div className="flex h-full gap-2.5 overflow-x-auto px-4 pb-3">
-          {STAGE_ORDER.map((stage) => {
-            const items = candidates.filter((c) => c.stage === stage)
-            return (
-              <Column
-                key={stage}
-                stage={stage}
-                items={items}
-                pipeline={pipeline}
-                selectedId={selectedId}
-                onOpen={onOpen}
-                dragging={activeId}
-              />
-            )
-          })}
-        </div>
-        <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-canvas to-transparent" />
+    <div className="relative h-full">
+      <div className="flex h-full gap-2.5 overflow-x-auto px-4 pb-3">
+        {STAGE_ORDER.map((stage) => {
+          const items = candidates.filter((c) => c.stage === stage)
+          return (
+            <Column
+              key={stage}
+              stage={stage}
+              items={items}
+              pipeline={pipeline}
+              selectedId={selectedId}
+              onOpen={onOpen}
+            />
+          )
+        })}
       </div>
-
-      <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(.22,1,.36,1)' }}>
-        {active ? <Card candidate={active} pipeline={pipeline} dragging /> : null}
-      </DragOverlay>
-    </DndContext>
+      <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-canvas to-transparent" />
+    </div>
   )
 }
 
@@ -125,52 +60,41 @@ function Column({
   pipeline,
   selectedId,
   onOpen,
-  dragging,
 }: {
   stage: Stage
   items: Candidate[]
   pipeline: Pipeline | null
   selectedId: string | null
   onOpen: (id: string) => void
-  dragging: string | null
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `stage:${stage}` })
   const scored = items.filter((c) => typeof c.score === 'number')
   const avg = scored.length ? Math.round(scored.reduce((acc, c) => acc + (c.score || 0), 0) / scored.length) : null
 
   return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        'flex h-full min-h-0 w-[238px] shrink-0 flex-col rounded-xl border p-2 transition-colors',
-        isOver ? 'border-foreground/30 bg-muted/70' : 'border-border/80 bg-muted/35',
-      )}
-    >
+    <div className="flex h-full min-h-0 w-[238px] shrink-0 flex-col rounded-xl border border-border/80 bg-muted/35 p-2">
       <div className="mb-2 flex shrink-0 items-center gap-1.5 px-1 py-0.5">
         <span className={cn('size-2 rounded-full', STAGE_DOT[stage])} />
         <span className="text-[12px] font-semibold tracking-tight">{STAGE_LABEL[stage]}</span>
         <span className="rounded bg-background/80 px-1.5 py-0.2 text-[10px] font-medium text-muted-foreground tabular-nums">
           {items.length}
         </span>
-        {avg !== null && (
-          <span className="ml-auto text-[10px] text-muted-foreground/80 tabular-nums">均 {avg}</span>
-        )}
+        {avg !== null && <span className="ml-auto text-[10px] text-muted-foreground/80 tabular-nums">均 {avg}</span>}
       </div>
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-0.5">
         {items.slice(0, 60).map((candidate) => (
-          <DraggableCard
+          <button
             key={candidate.id}
-            candidate={candidate}
-            pipeline={pipeline}
-            selected={candidate.id === selectedId}
-            onOpen={onOpen}
-            hidden={dragging === candidate.id}
-          />
+            type="button"
+            onClick={() => onOpen(candidate.id)}
+            className="block w-full text-left"
+          >
+            <Card candidate={candidate} pipeline={pipeline} selected={candidate.id === selectedId} />
+          </button>
         ))}
         {items.length === 0 && (
           <div className="flex h-20 items-center justify-center rounded-lg border border-dashed border-border/70 text-[11px] text-muted-foreground/70">
-            拖到此处调整阶段
+            暂无候选人
           </div>
         )}
         {items.length > 60 && (
@@ -183,51 +107,14 @@ function Column({
   )
 }
 
-function DraggableCard({
-  candidate,
-  pipeline,
-  selected,
-  onOpen,
-  hidden,
-}: {
-  candidate: Candidate
-  pipeline: Pipeline | null
-  selected: boolean
-  onOpen: (id: string) => void
-  hidden: boolean
-}) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: candidate.id,
-    data: { candidate },
-  })
-
-  return (
-    <motion.div
-      ref={setNodeRef}
-      style={{
-        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
-        opacity: hidden || isDragging ? 0.35 : 1,
-      }}
-      {...listeners}
-      {...attributes}
-      onClick={() => onOpen(candidate.id)}
-      className="cursor-grab active:cursor-grabbing"
-    >
-      <Card candidate={candidate} pipeline={pipeline} selected={selected} />
-    </motion.div>
-  )
-}
-
 function Card({
   candidate,
   pipeline,
   selected,
-  dragging,
 }: {
   candidate: Candidate
   pipeline: Pipeline | null
   selected?: boolean
-  dragging?: boolean
 }) {
   const avatar = avatarUrl(candidate)
   const tier = tierBadge(candidate.score, candidate.tier)
@@ -240,9 +127,8 @@ function Card({
   return (
     <div
       className={cn(
-        'rounded-lg border bg-card p-2.5 shadow-2xs transition-all',
+        'rounded-lg border bg-card p-2.5 shadow-2xs transition-all hover:border-foreground/20',
         selected && 'border-foreground/35 ring-1 ring-foreground/10',
-        dragging && 'rotate-1 shadow-lg ring-1 ring-foreground/15',
       )}
     >
       <div className="flex items-start gap-2">
@@ -297,9 +183,7 @@ function Card({
         )}
         {candidate.evalId && <Sparkles className="size-2.5 shrink-0 text-indigo-500" />}
         {candidate.hasResumeImage && <ImageIcon className="size-2.5 shrink-0 text-emerald-500" />}
-        <span className="ml-auto truncate text-[9.5px] text-muted-foreground/75">
-          {facts.latestWork || ''}
-        </span>
+        <span className="ml-auto truncate text-[9.5px] text-muted-foreground/75">{facts.latestWork || ''}</span>
       </div>
     </div>
   )
