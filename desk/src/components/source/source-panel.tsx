@@ -46,10 +46,10 @@ import {
   STAGE_LABEL,
   STAGE_ORDER,
   avatarUrl,
-  conciseVerdict,
   factsLine,
   initials,
   normalizeSource,
+  oneSentenceSummary,
   positionShortLabel,
   scoreClass,
   tierBadge,
@@ -57,6 +57,7 @@ import {
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { filterCandidates, useDesk, type QuickFilterKey, type SourceFilterKey } from '@/store/desk'
+import { advancedFilterCount, AdvancedFilterButton } from './advanced-filter'
 import type { Candidate, CandidateSource, Pipeline } from '@/types'
 import { Board } from './board'
 
@@ -106,10 +107,13 @@ export function SourcePanel() {
     position,
     query,
     sort,
+    advanced,
     sourceView,
     setSourceFilter,
     setStage,
     setQuickFilter,
+    setAdvanced,
+    resetAdvanced,
     resetSourceFilters,
     setPosition,
     setSort,
@@ -152,9 +156,22 @@ export function SourcePanel() {
   }, [sourceScoped])
 
   const list = useMemo(
-    () => filterCandidates(candidates, { sourceFilter, stage, quickFilter, position, query, sort }),
-    [candidates, sourceFilter, stage, quickFilter, position, query, sort],
+    () => filterCandidates(candidates, { sourceFilter, stage, quickFilter, position, query, sort, advanced }),
+    [candidates, sourceFilter, stage, quickFilter, position, query, sort, advanced],
   )
+
+  const cityOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const c of candidates) {
+      const raw = (c.facts?.city || '').replace(/\s+/g, ' ').trim()
+      if (!raw) continue
+      for (const part of raw.split(/[&、/·,，]+/)) {
+        const city = part.replace(/(市|地区)$/, '').trim()
+        if (city && city.length <= 6) set.add(city)
+      }
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  }, [candidates])
 
   const highUncontactedCount = useMemo(
     () => sourceScoped.filter((c) => (c.score ?? 0) >= 70 && ['new', 'screened', 'shortlisted'].includes(c.stage)).length,
@@ -185,7 +202,12 @@ export function SourcePanel() {
   const reached = (stageCounts.greeted || 0) + (stageCounts.replied || 0) + (stageCounts.interview || 0)
   const awaiting = (stageCounts.greeted || 0) + (stageCounts.shortlisted || 0)
   const hasActiveFilter =
-    sourceFilter !== 'all' || stage !== 'all' || quickFilter !== 'all' || position !== 'all' || Boolean(query.trim())
+    sourceFilter !== 'all' ||
+    stage !== 'all' ||
+    quickFilter !== 'all' ||
+    position !== 'all' ||
+    Boolean(query.trim()) ||
+    advancedFilterCount(advanced) > 0
   const quickFilters = quickFiltersForSource(sourceFilter)
 
   const copyAgentPrompt = async (prompt: string) => {
@@ -212,7 +234,7 @@ export function SourcePanel() {
           label={sourceFilter === 'all' ? '在库候选人' : SOURCE_META[sourceFilter].label}
           value={sourceScoped.length}
           unit="人"
-          hint={`消息 ${sourceCounts.message} · 推荐 ${sourceCounts.recommend} · 精选 ${sourceCounts.featured}`}
+          hint={`私聊 ${sourceCounts.message} · 推荐 ${sourceCounts.recommend} · 精选 ${sourceCounts.featured}`}
           active={sourceFilter === 'all' && stage === 'all' && quickFilter === 'all'}
           onClick={resetSourceFilters}
         />
@@ -256,21 +278,21 @@ export function SourcePanel() {
         />
       </div>
 
-      {/* 来源渠道切换与统计栏（消息列表 / 推荐牛人 / 精选牛人，不含最新） */}
+      {/* 来源渠道切换与统计栏（全部 / 私聊 / 推荐 / 精选） */}
       <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-4 pt-3">
         <div className="no-scrollbar flex items-center gap-1 overflow-x-auto">
           <SourceTabChip
             active={sourceFilter === 'all'}
             onClick={() => setSourceFilter('all')}
             icon={Users}
-            label="全部来源"
+            label="全部"
             count={positionScoped.length}
           />
           <SourceTabChip
             active={sourceFilter === 'message'}
             onClick={() => setSourceFilter('message')}
             icon={Inbox}
-            label="消息列表"
+            label="私聊"
             count={sourceCounts.message}
             dotClass={SOURCE_META.message.dotClass}
           />
@@ -278,7 +300,7 @@ export function SourcePanel() {
             active={sourceFilter === 'recommend'}
             onClick={() => setSourceFilter('recommend')}
             icon={UserPlus}
-            label="推荐牛人"
+            label="推荐"
             count={sourceCounts.recommend}
             dotClass={SOURCE_META.recommend.dotClass}
           />
@@ -286,7 +308,7 @@ export function SourcePanel() {
             active={sourceFilter === 'featured'}
             onClick={() => setSourceFilter('featured')}
             icon={Crown}
-            label="精选牛人"
+            label="精选"
             count={sourceCounts.featured}
             dotClass={SOURCE_META.featured.dotClass}
           />
@@ -330,6 +352,14 @@ export function SourcePanel() {
             ))}
           </SelectContent>
         </Select>
+
+        <AdvancedFilterButton
+          advanced={advanced}
+          cities={cityOptions}
+          matched={list.length}
+          onChange={setAdvanced}
+          onReset={resetAdvanced}
+        />
 
         {quickFilters.map((spec) => (
           <QuickChip
@@ -661,7 +691,7 @@ export function CandidateRow({
   const hasLocalPdf = Boolean(candidate.resumePdfFile || candidate.evalPdfPath)
   const hasLocalOnline = Boolean(candidate.onlineResumeFile)
   const profileLine = factsLine(candidate)
-  const verdict = conciseVerdict(candidate)
+  const summary = oneSentenceSummary(candidate)
 
   return (
     <button
@@ -764,31 +794,11 @@ export function CandidateRow({
         </div>
       </div>
 
-      {/* 下半区：AI 精简综合研判 */}
-      {verdict && (
+      {/* 下半区：一句话总结 */}
+      {summary && (
         <div className="flex w-full items-start gap-1.5 border-t border-border/55 pt-1.5">
-          {verdict.isFallbackMessage ? (
-            <MessageSquare className="mt-0.5 size-3 shrink-0 text-muted-foreground/60" />
-          ) : (
-            <Sparkles className="mt-0.5 size-3 shrink-0 text-indigo-500/80 dark:text-indigo-400/80" />
-          )}
-          <div className="line-clamp-2 min-w-0 flex-1 text-[11.5px] leading-[1.45] text-foreground/80">
-            {verdict.tag && (
-              <span
-                className={cn(
-                  'mr-1.5 inline-block rounded px-1.5 py-0.2 align-baseline text-[10px] font-medium',
-                  verdict.tone === 'strong'
-                    ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
-                    : verdict.tone === 'good'
-                      ? 'bg-indigo-500/12 text-indigo-700 dark:text-indigo-300'
-                      : 'bg-muted text-muted-foreground',
-                )}
-              >
-                {verdict.tag}
-              </span>
-            )}
-            <span className={verdict.isFallbackMessage ? 'text-muted-foreground' : undefined}>{verdict.text}</span>
-          </div>
+          <Sparkles className="mt-0.5 size-3 shrink-0 text-indigo-500/80 dark:text-indigo-400/80" />
+          <p className="line-clamp-2 min-w-0 flex-1 text-[11.5px] leading-[1.45] text-foreground/75">{summary}</p>
         </div>
       )}
     </button>

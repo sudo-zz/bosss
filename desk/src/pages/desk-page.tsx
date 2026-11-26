@@ -30,6 +30,7 @@ export function DeskPage() {
     position,
     query,
     sort,
+    advanced,
     detailOpen,
     closeDetail,
     selectedId,
@@ -49,8 +50,17 @@ export function DeskPage() {
   }, [load, setLiveConnected])
 
   const filteredSource = useMemo(
-    () => filterCandidates(pipeline?.candidates ?? [], { sourceFilter, stage, quickFilter, position, query, sort }),
-    [pipeline?.candidates, sourceFilter, stage, quickFilter, position, query, sort],
+    () =>
+      filterCandidates(pipeline?.candidates ?? [], {
+        sourceFilter,
+        stage,
+        quickFilter,
+        position,
+        query,
+        sort,
+        advanced,
+      }),
+    [pipeline?.candidates, sourceFilter, stage, quickFilter, position, query, sort, advanced],
   )
   const filteredEval = useMemo(
     () => topEval(evalData?.candidates ?? [], position, query),

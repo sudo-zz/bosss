@@ -35,6 +35,7 @@ import {
   dimEntries,
   initials,
   normalizeSource,
+  oneSentenceSummary,
   positionShortLabel,
   resolvedFacts,
   scoreClass,
@@ -70,6 +71,7 @@ export function CandidateDetail({ candidate }: { candidate: Candidate | null }) 
   const tier = tierBadge(candidate.score, candidate.tier)
   const dims = dimEntries(candidate)
   const facts = resolvedFacts(candidate)
+  const summary = oneSentenceSummary(candidate)
   const stackText = [
     candidate.summary,
     facts.latestWork,
@@ -98,7 +100,7 @@ export function CandidateDetail({ candidate }: { candidate: Candidate | null }) 
       `岗位：${candidate.job}｜来源：${sourceMeta.label}｜阶段：${STAGE_LABEL[candidate.stage]}`,
       candidate.geekId ? `geekId：${candidate.geekId}` : '',
       `基础画像：${[facts.age, facts.exp, facts.edu, facts.city, facts.salary, facts.latestWork].filter(Boolean).join(' · ') || '待补充'}`,
-      candidate.reason ? `综合研判：${candidate.reason}` : '',
+      summary ? `一句话总结：${summary}` : '',
     ]
       .filter(Boolean)
       .join('\n')
@@ -294,11 +296,11 @@ export function CandidateDetail({ candidate }: { candidate: Candidate | null }) 
             </section>
           )}
 
-          {candidate.reason && (
+          {summary && (
             <section>
-              <SectionTitle>综合研判</SectionTitle>
-              <p className="mt-1.5 rounded-xl border bg-muted/25 px-3 py-2 text-[12px] leading-relaxed text-foreground/85">
-                {candidate.reason}
+              <SectionTitle>一句话总结</SectionTitle>
+              <p className="mt-1.5 rounded-xl border bg-card px-3 py-2 text-[12px] leading-relaxed text-foreground/85">
+                {summary}
               </p>
             </section>
           )}
@@ -412,6 +414,9 @@ export function CandidateDetail({ candidate }: { candidate: Candidate | null }) 
         source={sourceKey}
         pdfFile={localPdfFile}
         onlineResumeFile={candidate.onlineResumeFile}
+        factsLine={[facts.age, facts.exp, facts.edu, facts.city, facts.salary, facts.latestWork]
+          .filter(Boolean)
+          .join(' · ')}
       />
     </PanelSwap>
   )

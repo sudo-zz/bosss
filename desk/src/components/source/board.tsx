@@ -8,9 +8,9 @@ import {
   STAGE_LABEL,
   STAGE_ORDER,
   avatarUrl,
-  conciseVerdict,
   initials,
   normalizeSource,
+  oneSentenceSummary,
   positionShortLabel,
   resolvedFacts,
   scoreClass,
@@ -122,7 +122,7 @@ function Card({
   const srcMeta = SOURCE_META[normalizeSource(candidate.source)]
   const hasLocalPdf = Boolean(candidate.resumePdfFile || candidate.evalPdfPath)
   const facts = resolvedFacts(candidate)
-  const verdict = conciseVerdict(candidate)
+  const summary = oneSentenceSummary(candidate)
 
   return (
     <div
@@ -157,10 +157,9 @@ function Card({
         </span>
       </div>
 
-      {verdict && (
+      {summary && (
         <div className="mt-1.5 line-clamp-2 border-t border-border/50 pt-1.5 text-[10.5px] leading-snug text-foreground/75">
-          {verdict.tag && <span className="mr-1 font-medium text-foreground/90">[{verdict.tag}]</span>}
-          {verdict.text}
+          {summary}
         </div>
       )}
 

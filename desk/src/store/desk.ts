@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { api } from '@/lib/api'
-import { normalizeSource, resolvedFacts } from '@/lib/format'
+import { normalizeSource, candidateActivityAt, resolvedFacts } from '@/lib/format'
 import type {
   Candidate,
   CandidateSource,
@@ -16,6 +16,13 @@ export type ModuleKey = 'source' | 'assess'
 export type SourceView = 'list' | 'board'
 export type SortKey = 'score' | 'recent'
 export type SourceFilterKey = 'all' | CandidateSource
+export type AdvancedFilters = {
+  scoreMin: string
+  scoreMax: string
+  city: string
+  edu: string
+  within: string
+}
 export type QuickFilterKey =
   | 'all'
   | 'high_uncontacted'
@@ -63,6 +70,7 @@ type DeskState = {
   position: string
   query: string
   sort: SortKey
+  advanced: AdvancedFilters
   selectedId: string | null
   selectedEvalId: string | null
   detailOpen: boolean
@@ -80,6 +88,8 @@ type DeskState = {
   setPosition: (position: string) => void
   setQuery: (query: string) => void
   setSort: (sort: SortKey) => void
+  setAdvanced: (patch: Partial<AdvancedFilters>) => void
+  resetAdvanced: () => void
   select: (id: string | null) => void
   selectEval: (id: string | null) => void
   closeDetail: () => void
@@ -87,6 +97,14 @@ type DeskState = {
 
 const initialTheme = readInitialTheme()
 applyThemeClass(initialTheme)
+
+export const EMPTY_ADVANCED: AdvancedFilters = {
+  scoreMin: '',
+  scoreMax: '',
+  city: 'all',
+  edu: 'all',
+  within: 'all',
+}
 
 export const useDesk = create<DeskState>((set) => ({
   pipeline: null,
@@ -107,6 +125,7 @@ export const useDesk = create<DeskState>((set) => ({
   position: 'all',
   query: '',
   sort: 'score',
+  advanced: { ...EMPTY_ADVANCED },
   selectedId: null,
   selectedEvalId: null,
   detailOpen: false,
@@ -184,10 +203,20 @@ export const useDesk = create<DeskState>((set) => ({
       quickFilter: state.quickFilter === quickFilter ? 'all' : quickFilter,
       stage: quickFilter === 'high_uncontacted' ? 'all' : state.stage,
     })),
-  resetSourceFilters: () => set({ sourceFilter: 'all', stage: 'all', quickFilter: 'all', position: 'all', query: '' }),
+  resetSourceFilters: () =>
+    set({
+      sourceFilter: 'all',
+      stage: 'all',
+      quickFilter: 'all',
+      position: 'all',
+      query: '',
+      advanced: { ...EMPTY_ADVANCED },
+    }),
   setPosition: (position) => set({ position }),
   setQuery: (query) => set({ query }),
   setSort: (sort) => set({ sort }),
+  setAdvanced: (patch) => set((state) => ({ advanced: { ...state.advanced, ...patch } })),
+  resetAdvanced: () => set({ advanced: { ...EMPTY_ADVANCED } }),
   select: (selectedId) => set({ selectedId, detailOpen: Boolean(selectedId) }),
   selectEval: (selectedEvalId) => set({ selectedEvalId, detailOpen: Boolean(selectedEvalId) }),
   closeDetail: () => set({ detailOpen: false }),
@@ -234,6 +263,28 @@ export function matchesQuickFilter(candidate: Candidate, quickFilter: QuickFilte
   return true
 }
 
+export function matchesAdvanced(candidate: Candidate, advanced?: AdvancedFilters): boolean {
+  if (!advanced) return true
+  const score = candidate.score
+  const min = Number.parseInt(advanced.scoreMin, 10)
+  const max = Number.parseInt(advanced.scoreMax, 10)
+  if (Number.isFinite(min) && (score ?? -1) < min) return false
+  if (Number.isFinite(max) && (score ?? -1) > max) return false
+  if (advanced.city !== 'all' || advanced.edu !== 'all') {
+    const facts = resolvedFacts(candidate)
+    if (advanced.city !== 'all' && !(facts.city || '').includes(advanced.city)) return false
+    if (advanced.edu !== 'all' && !(facts.edu || '').includes(advanced.edu)) return false
+  }
+  if (advanced.within !== 'all') {
+    const days = Number.parseInt(advanced.within, 10)
+    if (Number.isFinite(days) && days > 0) {
+      const at = candidateActivityAt(candidate)
+      if (!at || Date.now() - at > days * 86_400_000) return false
+    }
+  }
+  return true
+}
+
 export function filterCandidates(
   candidates: Candidate[],
   filters: {
@@ -243,15 +294,18 @@ export function filterCandidates(
     position: string
     query: string
     sort: SortKey
+    advanced?: AdvancedFilters
   },
 ): Candidate[] {
   const q = filters.query.trim().toLowerCase()
   const sf = filters.sourceFilter ?? 'all'
+  const adv = filters.advanced
   return candidates
     .filter((c) => (sf === 'all' ? true : normalizeSource(c.source) === sf))
     .filter((c) => (filters.stage === 'all' ? true : c.stage === filters.stage))
     .filter((c) => matchesQuickFilter(c, filters.quickFilter))
     .filter((c) => (filters.position === 'all' ? true : c.positionId === filters.position))
+    .filter((c) => matchesAdvanced(c, adv))
     .filter((c) => {
       if (!q) return true
       return [

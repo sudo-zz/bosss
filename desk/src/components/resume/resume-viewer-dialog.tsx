@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Check,
   ChevronLeft,
@@ -11,6 +11,10 @@ import {
   HardDrive,
   Image as ImageIcon,
   Loader2,
+  Maximize2,
+  Minimize2,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -37,6 +41,7 @@ export type ResumeViewerProps = {
   source?: CandidateSource | string
   pdfFile?: string | null
   onlineResumeFile?: string | null
+  factsLine?: string
 }
 
 export function ResumeViewerDialog(props: ResumeViewerProps) {
@@ -52,6 +57,9 @@ export function ResumeViewerDialog(props: ResumeViewerProps) {
   )
 }
 
+const MIN_SCALE = 0.25
+const MAX_SCALE = 4
+
 function ResumeViewerBody({
   initialTab = 'pdf',
   initialPage = 1,
@@ -61,15 +69,21 @@ function ResumeViewerBody({
   source,
   pdfFile,
   onlineResumeFile,
+  factsLine,
 }: ResumeViewerProps) {
   const [tab, setTab] = useState<ResumeViewerTab>(initialTab)
   const [page, setPage] = useState<number>(Math.max(1, initialPage))
   const [pageInput, setPageInput] = useState<string>(String(Math.max(1, initialPage)))
+  const [expanded, setExpanded] = useState(false)
   const activePdfUrl = pdfResumeUrl(pdfFile)
 
   const [onlineLoading, setOnlineLoading] = useState(Boolean(candidateName))
-  const [showScreenshot, setShowScreenshot] = useState(false)
   const [onlineRecord, setOnlineRecord] = useState<OnlineResumeRecord | null>(null)
+  const [onlineView, setOnlineView] = useState<'text' | 'image'>('text')
+  const [fitWidth, setFitWidth] = useState(true)
+  const [scale, setScale] = useState(1)
+  const [natural, setNatural] = useState({ w: 0, h: 0 })
+  const imageWrapRef = useRef<HTMLDivElement | null>(null)
   const [copied, setCopied] = useState(false)
 
   const normalizedSrc = normalizeSource(source)
@@ -83,8 +97,10 @@ function ResumeViewerBody({
       .then((rec) => {
         if (!cancelled) {
           setOnlineRecord(rec)
-          // Canvas/图片简历没有可提取文本时，有截图就直接显示截图，避免打开后一片空白
-          setShowScreenshot(Boolean(rec.screenshotUrl) && !String(rec.text || '').trim())
+          // Canvas / 图片简历没有可提取文本时直接展示截图，避免打开后一片空白
+          setOnlineView(String(rec.text || '').trim() ? 'text' : 'image')
+          setFitWidth(true)
+          setScale(1)
           setOnlineLoading(false)
         }
       })
@@ -119,6 +135,22 @@ function ResumeViewerBody({
   const quickPageCount = Math.min(8, Math.max(totalPagesHint || 4, page))
   const iframeSrc = activePdfUrl ? `${activePdfUrl}#page=${page}&view=FitH` : null
 
+  const hasText = Boolean(String(onlineRecord?.text || '').trim())
+  const hasImage = Boolean(onlineRecord?.screenshotUrl)
+  const imageWidth = useMemo(() => {
+    if (!natural.w) return '100%'
+    if (fitWidth) return '100%'
+    return `${Math.round(natural.w * scale)}px`
+  }, [natural.w, fitWidth, scale])
+
+  const zoomBy = (delta: number) => {
+    const boxWidth = imageWrapRef.current?.clientWidth ?? 0
+    const fitRatio = natural.w && boxWidth ? boxWidth / natural.w : 1
+    const base = fitWidth ? fitRatio : scale
+    setFitWidth(false)
+    setScale(Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number((base + delta).toFixed(2)))))
+  }
+
   const agentFetchOnlinePrompt =
     normalizedSrc === 'recommend' || normalizedSrc === 'featured'
       ? `请帮我调用 boss preview "${candidateName}" --tab ${normalizedSrc}${job ? ` --job "${job}"` : ''} --json 读取并转存「${candidateName}」的 Boss 在线简历到本地。`
@@ -127,12 +159,17 @@ function ResumeViewerBody({
   const agentImportPdfPrompt = `请帮我把「${candidateName}」的 PDF 简历放入 ~/.boss-cli/resumes/pdf/${candidateName}.pdf，并更新本地台账。`
 
   return (
-    <DialogContent className="flex h-[88vh] max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[960px]">
+    <DialogContent
+      className={cn(
+        'flex flex-col gap-0 overflow-hidden p-0 transition-[max-width,height] duration-200',
+        expanded ? 'h-[94vh] max-h-[94vh] sm:max-w-[96vw]' : 'h-[88vh] max-h-[88vh] sm:max-w-[1080px]',
+      )}
+    >
       <DialogHeader className="shrink-0 border-b px-5 pt-4 pb-3">
         <div className="flex flex-wrap items-center gap-2 pr-8">
           <DialogTitle className="flex items-center gap-2 text-[15px]">
             <FileText className="size-4 text-primary" />
-            {candidateName} · 本地简历档案
+            {candidateName} · 简历档案
           </DialogTitle>
           {job && (
             <Badge variant="outline" className="h-5 rounded px-1.5 text-[10.5px] font-normal">
@@ -143,29 +180,37 @@ function ResumeViewerBody({
             {srcMeta.label}
           </Badge>
         </div>
-        <DialogDescription className="text-[11.5px]">
-          纯本地只读查看器：自动读取 ~/.boss-cli/resumes/pdf/ 中的 PDF 与 ~/.boss-cli/resumes/online/ 中的 Boss 在线简历存档。
+        <DialogDescription className="line-clamp-1 text-[11.5px]">
+          {factsLine || '本地只读查看：PDF 附件简历与 Boss 在线简历存档，均来自本机 ~/.boss-cli/'}
         </DialogDescription>
       </DialogHeader>
 
-      <Tabs
-        value={tab}
-        onValueChange={(v) => setTab(v as ResumeViewerTab)}
-        className="flex min-h-0 flex-1 flex-col"
-      >
+      <Tabs value={tab} onValueChange={(v) => setTab(v as ResumeViewerTab)} className="flex min-h-0 flex-1 flex-col">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-muted/25 px-5 py-2">
-          <TabsList className="h-8 bg-muted/80 p-0.5">
-            <TabsTrigger value="pdf" className="gap-1.5 px-3 text-[12px]">
-              <FileText className="size-3.5" />
-              PDF 附件简历
-              {activePdfUrl && <span className="size-1.5 rounded-full bg-emerald-500" />}
-            </TabsTrigger>
-            <TabsTrigger value="online" className="gap-1.5 px-3 text-[12px]">
-              <Globe className="size-3.5" />
-              Boss 在线简历
-              {onlineRecord?.found && <span className="size-1.5 rounded-full bg-emerald-500" />}
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex items-center gap-1.5">
+            <TabsList className="h-8 bg-muted/80 p-0.5">
+              <TabsTrigger value="pdf" className="gap-1.5 px-3 text-[12px]">
+                <FileText className="size-3.5" />
+                PDF 简历
+                {activePdfUrl && <span className="size-1.5 rounded-full bg-emerald-500" />}
+              </TabsTrigger>
+              <TabsTrigger value="online" className="gap-1.5 px-3 text-[12px]">
+                <Globe className="size-3.5" />
+                在线简历
+                {onlineRecord?.found && <span className="size-1.5 rounded-full bg-emerald-500" />}
+              </TabsTrigger>
+            </TabsList>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => setExpanded((v) => !v)}
+              title={expanded ? '还原窗口' : '放大窗口'}
+              className="text-muted-foreground"
+            >
+              {expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+            </Button>
+          </div>
 
           {tab === 'pdf' && activePdfUrl && (
             <div className="flex flex-wrap items-center gap-1.5">
@@ -241,29 +286,78 @@ function ResumeViewerBody({
           )}
 
           {tab === 'online' && onlineRecord?.found && (
-            <div className="flex items-center gap-1.5">
-              {onlineRecord.screenshotUrl && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {hasText && hasImage && (
+                <Tabs value={onlineView} onValueChange={(v) => setOnlineView(v as 'text' | 'image')}>
+                  <TabsList className="h-7 bg-muted/80 p-0.5">
+                    <TabsTrigger value="image" className="gap-1 px-2 text-[11px]">
+                      <ImageIcon className="size-3" />
+                      截图
+                    </TabsTrigger>
+                    <TabsTrigger value="text" className="gap-1 px-2 text-[11px]">
+                      <FileText className="size-3" />
+                      文本
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              )}
+
+              {onlineView === 'image' && hasImage && (
+                <div className="flex items-center gap-0.5 rounded-lg border bg-card px-1 py-0.5">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="size-6"
+                    onClick={() => zoomBy(-0.25)}
+                    title="缩小"
+                  >
+                    <ZoomOut className="size-3.5" />
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setFitWidth(true)}
+                    className={cn(
+                      'min-w-10 rounded px-1 text-[10.5px] font-medium tabular-nums transition-colors',
+                      fitWidth ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                    )}
+                    title="点击适应宽度"
+                  >
+                    {fitWidth ? '适应' : `${Math.round(scale * 100)}%`}
+                  </button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="size-6"
+                    onClick={() => zoomBy(0.25)}
+                    title="放大"
+                  >
+                    <ZoomIn className="size-3.5" />
+                  </Button>
+                </div>
+              )}
+
+              {hasImage && onlineRecord.screenshotUrl && (
+                <Button variant="outline" size="xs" className="h-7 gap-1 text-[11.5px]" asChild>
+                  <a href={onlineRecord.screenshotUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink className="size-3" />
+                    原图
+                  </a>
+                </Button>
+              )}
+              {hasText && (
                 <Button
                   type="button"
                   variant="outline"
                   size="xs"
                   className="h-7 gap-1 text-[11.5px]"
-                  onClick={() => setShowScreenshot((s) => !s)}
+                  onClick={() => void copyText(onlineRecord?.text || '', '已复制在线简历全文')}
                 >
-                  <ImageIcon className="size-3" />
-                  {showScreenshot ? '切回文本视图' : '查看截图'}
+                  {copied ? <Check className="size-3 text-emerald-600" /> : <Copy className="size-3" />}
+                  {copied ? '已复制' : '复制全文'}
                 </Button>
               )}
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                className="h-7 gap-1 text-[11.5px]"
-                onClick={() => void copyText(onlineRecord.text || '', '已复制在线简历全文')}
-              >
-                {copied ? <Check className="size-3 text-emerald-600" /> : <Copy className="size-3" />}
-                {copied ? '已复制' : '复制全文'}
-              </Button>
             </div>
           )}
         </div>
@@ -304,7 +398,7 @@ function ResumeViewerBody({
                 </Button>
                 <Button type="button" size="sm" variant="ghost" onClick={() => setTab('online')} className="gap-1.5">
                   <Globe className="size-3.5" />
-                  查看 Boss 在线简历存档
+                  查看在线简历存档
                 </Button>
               </div>
             </div>
@@ -319,10 +413,10 @@ function ResumeViewerBody({
             </div>
           ) : onlineRecord?.found ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-emerald-500/[0.04] px-5 py-2 text-[11.5px]">
+              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-emerald-500/[0.04] px-5 py-1.5 text-[11px]">
                 <div className="flex flex-wrap items-center gap-2 text-emerald-700 dark:text-emerald-300">
                   <HardDrive className="size-3.5" />
-                  <span className="font-medium">本地已存档 · 离线零额度查看</span>
+                  <span className="font-medium">本地存档 · 离线可看</span>
                   {onlineRecord.capturedAt && (
                     <span className="text-muted-foreground">采集于 {relativeTime(onlineRecord.capturedAt)}</span>
                   )}
@@ -331,27 +425,53 @@ function ResumeViewerBody({
                       {onlineRecord.method}
                     </Badge>
                   )}
+                  {!hasText && hasImage && (
+                    <span className="text-muted-foreground">该简历为 Canvas 渲染，无文本，已存截图</span>
+                  )}
+                  {hasImage && natural.w > 0 && (
+                    <span className="hidden text-muted-foreground tabular-nums sm:inline">
+                      {natural.w} × {natural.h}
+                    </span>
+                  )}
                 </div>
               </div>
 
-              <ScrollArea className="min-h-0 flex-1">
-                <div className="space-y-4 p-5">
-                  {showScreenshot && onlineRecord.screenshotUrl ? (
-                    <img
-                      src={onlineRecord.screenshotUrl}
-                      alt={`${candidateName} 在线简历截图`}
-                      className="w-full rounded-xl border bg-background shadow-2xs"
-                    />
-                  ) : (
-                    <FormattedOnlineResume text={onlineRecord.text || ''} />
-                  )}
-                  {onlineRecord.filePath && (
-                    <div className="border-t pt-3 text-[10.5px] text-muted-foreground">
-                      本地存档路径：<code className="rounded bg-muted px-1.5 py-0.5">{onlineRecord.filePath}</code>
-                    </div>
-                  )}
+              {onlineView === 'image' && hasImage ? (
+                <div ref={imageWrapRef} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-muted/40 p-4">
+                  <img
+                    src={onlineRecord.screenshotUrl}
+                    alt={`${candidateName} 在线简历截图`}
+                    onLoad={(event) =>
+                      setNatural({
+                        w: event.currentTarget.naturalWidth,
+                        h: event.currentTarget.naturalHeight,
+                      })
+                    }
+                    style={{ width: imageWidth, maxWidth: 'none' }}
+                    className={cn(
+                      'block h-auto rounded-lg border bg-white shadow-xs',
+                      fitWidth ? 'mx-auto' : 'mx-0',
+                    )}
+                  />
                 </div>
-              </ScrollArea>
+              ) : (
+                <ScrollArea className="min-h-0 flex-1">
+                  <div className="space-y-4 p-5">
+                    {hasText ? (
+                      <FormattedOnlineResume text={onlineRecord.text || ''} />
+                    ) : (
+                      <div className="rounded-xl border border-dashed bg-card p-6 text-center text-[12px] text-muted-foreground">
+                        这份存档没有可提取的文本，也没有截图。可在左侧 Agent 对话中重新抓取一次。
+                      </div>
+                    )}
+                    {onlineRecord.filePath && (
+                      <div className="border-t pt-3 text-[10.5px] text-muted-foreground">
+                        本地存档路径：<code className="rounded bg-muted px-1.5 py-0.5">{onlineRecord.filePath}</code>
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+              )}
             </div>
           ) : (
             <div className="m-5 flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed bg-muted/20 p-8 text-center">

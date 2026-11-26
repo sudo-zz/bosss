@@ -8,21 +8,21 @@ export const SOURCE_META: Record<
   { label: string; shortLabel: string; className: string; dotClass: string }
 > = {
   message: {
-    label: '消息列表',
-    shortLabel: '消息',
+    label: '私聊',
+    shortLabel: '私聊',
     className:
       'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:border-sky-400/30 dark:bg-sky-500/15 dark:text-sky-300',
     dotClass: 'bg-sky-500',
   },
   recommend: {
-    label: '推荐牛人',
+    label: '推荐',
     shortLabel: '推荐',
     className:
       'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:border-violet-400/30 dark:bg-violet-500/15 dark:text-violet-300',
     dotClass: 'bg-violet-500',
   },
   featured: {
-    label: '精选牛人',
+    label: '精选',
     shortLabel: '精选',
     className:
       'border-amber-500/30 bg-amber-500/12 text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/15 dark:text-amber-300',
@@ -153,7 +153,8 @@ const EXP_LIKE_RE = /^(?:\d+(?:-\d+)?年(?:以上|以内)?|\d{2}年应届生?|�
 const AGE_LIKE_RE = /^\d+\s*岁$/
 const EDU_LIKE_RE = /^(?:大专|本科|硕士|博士|中专|高中|初中|MBA|EMBA|统招本科|统招硕士)/i
 const SALARY_LIKE_RE = /^(?:\d+\s*[-–~]\s*\d+\s*k(?:\s*·\s*\d+薪)?|面议)$/i
-const NOISE_TEXT_RE = /^(?:页面调整阶段|伯乐台\s*·\s*寻才|招聘助手\s*·\s*简历筛选|DSH\s*招聘助手|招聘助手调整阶段)$/
+const NOISE_TEXT_RE =
+  /^(?:页面调整阶段|伯乐台\s*·\s*寻才|招聘助手\s*·\s*简历筛选|DSH\s*招聘助手|招聘助手调整阶段|(?:人工校准|人工复核|人工打分|人工评分)[（(][^）)]*[）)])$/
 
 export function isProfileSummaryString(text?: string): boolean {
   if (!text) return false
@@ -217,6 +218,73 @@ export function factsLine(candidate: Candidate): string {
   return [f.age, f.exp, f.edu, f.city, f.salary, f.latestWork].filter(Boolean).join(' · ')
 }
 
+export function candidateActivityAt(candidate: Candidate): number {
+  if (candidate.updatedAt) {
+    const t = Date.parse(candidate.updatedAt)
+    if (!Number.isNaN(t)) return t
+  }
+  const raw = (candidate.lastTime || '').trim()
+  if (!raw) return 0
+  const hm = /^(\d{1,2}):(\d{2})$/.exec(raw)
+  if (hm) {
+    const d = new Date()
+    d.setHours(Number(hm[1]), Number(hm[2]), 0, 0)
+    return d.getTime()
+  }
+  const md = /^(\d{1,2})-(\d{1,2})$/.exec(raw)
+  if (md) {
+    const d = new Date()
+    d.setMonth(Number(md[1]) - 1, Number(md[2]))
+    d.setHours(12, 0, 0, 0)
+    return d.getTime()
+  }
+  if (/刚刚|今天/.test(raw)) return Date.now()
+  if (/昨天/.test(raw)) return Date.now() - 86_400_000
+  return 0
+}
+
+/**
+ * 候选人一句话总结：用自然语言说明「什么背景 + 现在做什么 + 擅长什么 + 期望」，
+ * 比裸分数更容易理解，也不依赖大模型调用。
+ */
+export function oneSentenceSummary(candidate: Candidate): string {
+  const f = resolvedFacts(candidate)
+  const expText = f.exp ? (/^\d+(?:-\d+)?年$/.test(f.exp) ? `${f.exp}经验` : f.exp) : ''
+  const bg = [expText, f.edu].filter(Boolean).join(' · ')
+  const work = (f.latestWork || '').replace(/\s*·\s*/g, ' 做 ').replace(/\s{2,}/g, ' ').trim()
+  const skills = (candidate.highlights || [])
+    .map((item) => item.replace(/[（(][^）)]*[）)]/g, '').trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('、')
+  const salary = (f.salary || '').trim()
+
+  const parts: string[] = []
+  if (work) parts.push(`目前在${work}`)
+  if (skills) parts.push(`擅长${skills}`)
+  if (!parts.length && bg) parts.push(bg)
+  if (!parts.length && salary) parts.push(`期望 ${salary}`)
+
+  if (parts.length) {
+    return compactText(`${parts.join('，')}。`, 76)
+  }
+
+  // 结构化字段不足时，退回清洗过的摘要/最后一句真实发言
+  const summary = (candidate.summary || '').trim()
+  if (summary && !NOISE_TEXT_RE.test(summary) && !isProfileSummaryString(summary)) {
+    return compactText(summary, 76)
+  }
+  const reason = (candidate.reason || '').trim()
+  if (reason && !NOISE_TEXT_RE.test(reason) && !isProfileSummaryString(reason)) {
+    return compactText(reason.replace(/^【[^】]+】\s*/, ''), 76)
+  }
+  const lastText = (candidate.lastText || '').trim()
+  if (lastText && !NOISE_TEXT_RE.test(lastText) && !isProfileSummaryString(lastText)) {
+    return compactText(lastText, 76)
+  }
+  return ''
+}
+
 function compactText(raw: string, maxLen = 78): string {
   const clean = raw.replace(/\s+/g, ' ').trim()
   if (clean.length <= maxLen) return clean
@@ -227,94 +295,6 @@ function compactText(raw: string, maxLen = 78): string {
     return slice.slice(0, stopIdx + 1)
   }
   return `${slice.replace(/[，,、；;：:\s]+$/, '')}…`
-}
-
-export type ConciseVerdict = {
-  tag?: string
-  tone: 'strong' | 'good' | 'neutral' | 'muted'
-  text: string
-  isFallbackMessage?: boolean
-}
-
-/** 提取适合卡片底部展示的精简 AI 综合研判（绝不重复个人信息） */
-export function conciseVerdict(candidate: Candidate): ConciseVerdict | null {
-  const reason = (candidate.reason || '').trim()
-  if (reason && !NOISE_TEXT_RE.test(reason) && !isProfileSummaryString(reason)) {
-    // 形式 1：【强烈建议约面·Java+Python双栈...】正文...
-    const bracket = /^【([^】]+)】\s*(.*)$/s.exec(reason)
-    if (bracket) {
-      const inside = bracket[1].trim()
-      const body = bracket[2].trim()
-      const splitIdx = inside.indexOf('·')
-      const tag = splitIdx > 0 ? inside.slice(0, splitIdx).trim() : inside
-      const tagExtra = splitIdx > 0 ? inside.slice(splitIdx + 1).trim() : ''
-      const tone: ConciseVerdict['tone'] = /强烈|推荐|优先|S级/.test(tag)
-        ? 'strong'
-        : /重点|不错|可约|A级/.test(tag)
-          ? 'good'
-          : 'neutral'
-      const combined = tagExtra && body ? `${tagExtra}；${body}` : tagExtra || body
-      return { tag, tone, text: compactText(combined, 76) }
-    }
-
-    // 形式 2：优势：xxx 风险：yyy
-    if (reason.startsWith('优势：') || reason.startsWith('优势:')) {
-      const [proPart, riskPart] = reason.split(/\s*风险[：:]\s*/)
-      const pros = proPart
-        .replace(/^优势[：:]\s*/, '')
-        .split(/[、,，]/)
-        .map((s) => s.replace(/[（(][^）)]*[）)]/g, '').trim())
-        .filter(Boolean)
-        .slice(0, 3)
-        .join(' · ')
-      const risk = riskPart
-        ? riskPart
-            .split(/[、,，]/)
-            .map((s) => s.replace(/[（(][^）)]*[）)]/g, '').trim())
-            .filter(Boolean)[0]
-        : ''
-      const summary = [pros, risk ? `注意：${risk}` : ''].filter(Boolean).join(' ｜ ')
-      return {
-        tag: (candidate.score ?? 0) >= 80 ? '高匹配' : 'AI 研判',
-        tone: (candidate.score ?? 0) >= 80 ? 'strong' : (candidate.score ?? 0) >= 68 ? 'good' : 'neutral',
-        text: compactText(summary || reason, 76),
-      }
-    }
-
-    return {
-      tag: 'AI 研判',
-      tone: (candidate.score ?? 0) >= 80 ? 'strong' : 'neutral',
-      text: compactText(reason, 78),
-    }
-  }
-
-  // 形式 3：亮点 + 风险数组（如阶段调整覆盖了 reason 时）
-  if (candidate.highlights?.length) {
-    const pros = candidate.highlights
-      .slice(0, 3)
-      .map((s) => s.replace(/[（(][^）)]*[）)]/g, '').trim())
-      .join(' · ')
-    const risk = candidate.risks?.[0]?.replace(/[（(][^）)]*[）)]/g, '').trim()
-    return {
-      tag: (candidate.score ?? 0) >= 80 ? '强烈推荐' : 'AI 亮点',
-      tone: (candidate.score ?? 0) >= 80 ? 'strong' : 'good',
-      text: compactText([pros, risk ? `注意：${risk}` : ''].filter(Boolean).join(' ｜ '), 76),
-    }
-  }
-
-  // 形式 4：非个人信息型的 summary
-  const summary = (candidate.summary || '').trim()
-  if (summary && !NOISE_TEXT_RE.test(summary) && !isProfileSummaryString(summary)) {
-    return { tag: '摘要', tone: 'neutral', text: compactText(summary, 76) }
-  }
-
-  // 形式 5：仅当 lastText 是真实候选人发言时兜底展示
-  const lastText = (candidate.lastText || '').trim()
-  if (lastText && !NOISE_TEXT_RE.test(lastText) && !isProfileSummaryString(lastText)) {
-    return { tone: 'muted', text: compactText(lastText, 76), isFallbackMessage: true }
-  }
-
-  return null
 }
 
 export function resumeSrc(page: string): string {
