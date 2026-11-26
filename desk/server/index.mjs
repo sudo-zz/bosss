@@ -624,6 +624,28 @@ function loadData() {
 const sseClients = new Set()
 let notifyTimer = null
 
+/** 前端构建指纹：index.html 与 assets 的最新修改时间 + 文件数，重建后必然变化 */
+function distToken() {
+  try {
+    const indexFile = path.join(DIST, 'index.html')
+    const assetsDir = path.join(DIST, 'assets')
+    let newest = statSync(indexFile).mtimeMs
+    const files = existsSync(assetsDir) ? readdirSync(assetsDir) : []
+    for (const file of files) {
+      try {
+        newest = Math.max(newest, statSync(path.join(assetsDir, file)).mtimeMs)
+      } catch {
+        /* 构建过程中文件可能被替换，忽略 */
+      }
+    }
+    return `${Math.round(newest)}-${files.length}`
+  } catch {
+    return '0'
+  }
+}
+
+let lastDistToken = distToken()
+
 function broadcastReload(reason = 'change') {
   if (notifyTimer) clearTimeout(notifyTimer)
   notifyTimer = setTimeout(() => {
@@ -657,6 +679,15 @@ function setupWatchers() {
 }
 
 setupWatchers()
+
+// 前端重新构建后自动通知浏览器整页重载，避免用户手动刷新才看到新界面
+setInterval(() => {
+  const token = distToken()
+  if (token !== lastDistToken) {
+    lastDistToken = token
+    broadcastReload('build')
+  }
+}, 1500).unref?.()
 
 /* ------------------------------------------------------------------ HTTP 服务 */
 
@@ -719,6 +750,11 @@ const server = createServer(async (req, res) => {
 
     if (pathname === '/api/data') {
       return json(res, 200, loadData())
+    }
+
+    // 前端构建指纹：desk/dist 重新构建后 token 变化，浏览器据此自动重载
+    if (pathname === '/api/build') {
+      return json(res, 200, { token: distToken() })
     }
 
     if (pathname === '/api/events') {

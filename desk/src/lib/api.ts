@@ -87,9 +87,51 @@ export function subscribeDataEvents(handlers: {
   if (typeof window === 'undefined' || typeof EventSource === 'undefined') {
     return () => {}
   }
+
+  // 前端重新构建后整页重载，用户不必手动刷新
+  let buildToken = ''
+  let reloading = false
+  const reloadForBuild = () => {
+    if (reloading) return
+    reloading = true
+    window.location.reload()
+  }
+  const checkBuild = async () => {
+    try {
+      const res = await fetch('/api/build', { cache: 'no-store' })
+      if (!res.ok) return
+      const { token } = (await res.json()) as { token?: string }
+      if (!token) return
+      if (buildToken && token !== buildToken) {
+        reloadForBuild()
+        return
+      }
+      buildToken = token
+    } catch {
+      /* 服务重启中，下个周期再试 */
+    }
+  }
+  void checkBuild()
+  const buildTimer = window.setInterval(checkBuild, 3000)
+
   const source = new EventSource('/api/events')
   source.addEventListener('ready', () => handlers.onReady?.())
-  source.addEventListener('update', () => handlers.onUpdate())
+  source.addEventListener('update', (event) => {
+    try {
+      const data = JSON.parse((event as MessageEvent).data || '{}') as { reason?: string }
+      if (data.reason === 'build') {
+        reloadForBuild()
+        return
+      }
+    } catch {
+      /* 非 JSON 事件按普通更新处理 */
+    }
+    handlers.onUpdate()
+  })
   source.onerror = () => handlers.onError?.()
-  return () => source.close()
+
+  return () => {
+    window.clearInterval(buildTimer)
+    source.close()
+  }
 }
