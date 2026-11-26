@@ -1,0 +1,168 @@
+{
+  "presets": [
+    {
+      "id": "ai-agent-fullstack",
+      "name": "AI 应用 / Agent 开发工程师（默认模板）",
+      "description": "适用于需要 Agent 编排（LangGraph/MCP/RAG）+ 前后端工程交付 + AI Coding 工具链的研发岗位",
+      "rubric": {
+        "schemaVersion": 1,
+        "storageKey": "boss_hr_marks_ai_agent_v1",
+        "job": {
+          "title": "AI应用开发工程师",
+          "company": "目标公司",
+          "location": "现场办公地址",
+          "salary": "15-20K",
+          "requirements": "本科及以上 · 1-3年 · Python/Java/TS · Agent/RAG/MCP/工作流 · AI Coding 工具链",
+          "targetCity": "上海",
+          "cityAliases": ["上海"],
+          "requireOnSite": true,
+          "onSiteRegex": "配合.*现场|来上海|可到场",
+          "gradReferenceYear": 2026,
+          "expIdealRange": [1, 4],
+          "expSeniorCutoff": 8,
+          "salaryTargetMax": 19,
+          "salarySoftMax": 22,
+          "salaryWarnMin": 20,
+          "allowCollege": false
+        },
+        "projectsSummary": "请在 rubric.json 中填写当前团队核心在研项目与真实技术栈（可先运行 scan_projects.mjs 生成）。",
+        "signals": {
+          "langgraph": "langgraph|deepagent|autogen|crewai|pi\\s|hermes|openclaw|react\\s*\\+|taskplanner|状态机|hitl|人机中断|断点恢复",
+          "basicAgent": "agent|智能体|multi-agent|多智能体|langchain|spring ai|dify|coze|workflow|工作流",
+          "mcp": "\\bmcp\\b|fastmcp|function calling|tool\\s*calling|tool调用|工具调用|工具治理|a2a",
+          "rag": "rag|graphrag|lightrag|pgvector|milvus|weaviate|qdrant|chroma|向量|混合检索|hybrid|rerank|rrf|召回|ragas|评测|幻觉",
+          "multimodal": "mineru|qwen-vl|vl|asr|tts|实时语音|多模态|ocr|pdf解析|文档解析",
+          "lowCode": "dify|coze",
+          "python": "python|fastapi|django|flask|pydantic|uv\\b",
+          "java": "java\\b|spring\\s*boot|spring\\s*cloud|spring\\s*ai|mybatis|langchain4j",
+          "goNode": "\\bgo\\b|golang|node\\.?js|bun\\b|hono|rust",
+          "frontend": "react|vue|typescript|\\bts\\b|\\bjs\\b|next\\.?js|electron|小程序|前端|全栈",
+          "dataInfra": "postgresql|\\bpg\\b|mysql|redis|kafka|rabbitmq|rocketmq|docker|k8s|nginx|minio|s3|elasticsearch|\\bes\\b|sse|websocket",
+          "coreAiCoding": "codex|claude\\s*code|openclaw|hermes|\\bpi\\b|workbuddy|agy",
+          "anyAiCoding": "codex|claude\\s*code|openclaw|hermes|\\bpi\\b|workbuddy|agy|cursor|trae|trea|vibe\\s*coding|harness|loop\\s*engineering",
+          "skills": "\\bskill|skills\\b",
+          "specTest": "可观测|trace|评测|单元测试|pytest|vitest|benchmark|鉴权|隔离|防资损|幂等|兜底|幻觉|熔断|降级",
+          "b2b": "crm|erp|wiki|权限|rbac|acl|多租户|工单|审批|账本|计费|报销|oa|企业微信|飞书|lark|合规|招投标|政务|电商|金融|投研|客服|医疗|供应链|物流|saas|b端|企业级|知识库|中台|平台|系统",
+          "delivery": "需求|对接客户|方案落地|售前|售后|独立交付|从0到1|0到1|0-1|上线|付费客户|数据清洗|测试排查|生产排查|私有化|text-?to-?sql|chatbi|问数",
+          "metrics": "\\d+%|\\d+ms|\\d+s|\\d+万|\\d+倍|\\d+\\+|高可用|并发"
+        },
+        "dimensions": [
+          {
+            "key": "agent",
+            "shortLabel": "Agent",
+            "label": "1. Agent / RAG / MCP 工程深度",
+            "maxScore": 35,
+            "description": "重视 LangGraph 状态机与 HITL 人工确认、MCP 工具治理、Hybrid RAG/向量检索与多模态解析；区分低代码拖拉拽与代码工程。",
+            "projectNames": ["Agent平台", "RAG知识库"],
+            "exclusiveGroups": [
+              [
+                { "when": "langgraph", "points": 14, "highlight": "LangGraph/可控Agent编排" },
+                { "when": "basicAgent", "points": 8, "highlight": "Agent/Workflow基础" }
+              ]
+            ],
+            "additive": [
+              { "when": "mcp", "points": 9, "highlight": "MCP/工具调用治理" },
+              { "when": "rag", "points": 8, "highlight": "RAG检索与幻觉/评测优化" },
+              { "when": "multimodal", "points": 4, "highlight": "MinerU/语音/多模态" }
+            ],
+            "caps": [
+              { "when": "lowCode && !langgraph && !mcp", "maxScore": 12, "risk": "偏低代码工作流(需核实代码能力)" }
+            ]
+          },
+          {
+            "key": "stack",
+            "shortLabel": "全栈",
+            "label": "2. 多栈工程交付与全栈能力",
+            "maxScore": 25,
+            "description": "关注 Python / Java 双栈或 Python + React/TS 全栈交付，以及 PG / Redis / Docker 线上排查能力。",
+            "projectNames": ["核心后端", "全栈应用"],
+            "exclusiveGroups": [
+              [
+                { "when": "python && java", "points": 15, "highlight": "Java+Python双栈" },
+                { "when": "python && (frontend || goNode)", "points": 14, "highlight": "Python+前端/TS全栈" },
+                { "when": "java && frontend", "points": 12, "highlight": "Java+前端全栈" },
+                { "when": "python || java || goNode", "points": 8 },
+                { "when": "frontend", "points": 5 }
+              ]
+            ],
+            "additive": [
+              { "when": "frontend && !(python && frontend)", "points": 4, "highlight": "具备React/Vue/TS前端" },
+              { "when": "goNode", "points": 3 },
+              { "when": "dataInfra", "points": 5, "highlight": "PG/MySQL/Redis/Docker工程栈" }
+            ]
+          },
+          {
+            "key": "aiTools",
+            "shortLabel": "AI工具",
+            "label": "3. AI Coding 工具链与工程纪律",
+            "maxScore": 15,
+            "description": "高频使用 Codex / Claude Code / OpenClaw / WorkBuddy 辅助编程，具备 Skills 封装与测试/评测意识。",
+            "projectNames": ["AI Coding 工作流"],
+            "exclusiveGroups": [
+              [
+                { "when": "coreAiCoding", "points": 10, "highlight": "Codex/ClaudeCode/OpenClaw实战" },
+                { "when": "anyAiCoding", "points": 8, "highlight": "AI Coding/Harness实践" }
+              ]
+            ],
+            "additive": [
+              { "when": "skills", "points": 4, "highlight": "Skills开发/编排" },
+              { "when": "specTest", "points": 4 }
+            ]
+          },
+          {
+            "key": "biz",
+            "shortLabel": "B端",
+            "label": "4. B端业务 / 工作流 / 客户交付",
+            "maxScore": 15,
+            "description": "CRM/ERP/Wiki/权限/审批/飞书企微集成经验，具备需求对接与量化交付成果。",
+            "projectNames": ["B端业务交付"],
+            "additive": [
+              { "when": "b2b", "points": 7, "highlight": "B端/企业级系统经验" },
+              { "when": "delivery", "points": 6, "highlight": "端到端生产交付" },
+              { "when": "metrics", "points": 3, "textScope": "messageAndOverride", "highlight": "有量化项目成果" }
+            ]
+          }
+        ],
+        "baseDimension": {
+          "key": "base",
+          "shortLabel": "基础",
+          "label": "5. 基础条件与现场面试可行性",
+          "maxScore": 10,
+          "description": "本科及以上、经验区间、期望城市现场可达性与薪资预算匹配。"
+        },
+        "modifiers": {
+          "internSignal": "27年应届|28年应届|长期实习|每周到岗|实习生|大三|研二",
+          "graduatedOverride": "已毕业|拿双证|26年|社招|全职工作",
+          "internCap": 58,
+          "nonDevRoleRegex": "产品经理|ui设计|交互设计|测试工程师|运营|销售",
+          "devEvidenceSignals": "python || java || goNode || frontend",
+          "nonDevCap": 45,
+          "nonTargetCityPenalty": 12,
+          "collegePenalty": 6,
+          "partTimePenalty": 5,
+          "resumeAttachmentBonus": 4
+        },
+        "tiers": {
+          "S": { "min": 80, "label": "S级 · 强烈推荐约面", "stage": "shortlisted", "sub": "80-100分 · 技术与项目高度对齐" },
+          "A": { "min": 66, "label": "A级 · 重点看简历/沟通", "stage": "shortlisted", "sub": "66-79分 · 强工程或双栈背景" },
+          "B": { "min": 48, "label": "B级 · 备选跟进池", "stage": "screened", "sub": "48-65分或待补信息" }
+        },
+        "techFilters": [
+          { "id": "ai_tools", "label": "Codex / Claude Code / OpenClaw / Skill", "pattern": "codex|claude|openclaw|hermes|skill|workbuddy|pi " },
+          { "id": "dual_stack", "label": "Java + Python 双栈", "signals": "java && python" },
+          { "id": "fullstack", "label": "含前端 React / Vue / TS", "pattern": "react|vue|typescript|全栈|前端" },
+          { "id": "langgraph", "label": "LangGraph / 状态机", "pattern": "langgraph" },
+          { "id": "mcp", "label": "MCP / FastMCP", "pattern": "\\bmcp\\b" },
+          { "id": "has_resume_img", "label": "已发图片简历 / 在线链接", "special": "has_resume_img" },
+          { "id": "real_photo", "label": "仅看已上传真人头像", "special": "real_photo" }
+        ],
+        "replyTemplates": {
+          "shortlistOnSite": "您好{name}！看了您的背景和{topHighlight}与我们团队非常契合。我们在{location}，方便发一份详细简历过来吗？合适的话我们尽快安排技术面试！",
+          "shortlistVerifyCity": "您好{name}！看了您的背景和{topHighlight}与我们团队非常契合。注意该岗位要求{targetCity}现场面试与办公（{location}），请确认是否方便现场面试，方便发一份详细简历过来吗？合适的话我们尽快安排技术面试！",
+          "templateOnly": "您好，请问有做过与岗位核心技术（如 LangGraph / MCP / RAG 或全栈开发）相关的项目吗？另外该岗位需要{targetCity}现场面试，如方便可发一份简历过来评估。",
+          "internDecline": "同学你好，目前这个岗位主要面向能全职在岗的社招/已毕业人选，后续如有实习需求再联系你，感谢关注！"
+        }
+      }
+    }
+  ]
+}

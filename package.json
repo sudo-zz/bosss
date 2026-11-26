@@ -1,0 +1,59 @@
+{
+  "name": "@joohw/boss-cli",
+  "version": "0.8.1-dsh",
+  "description": "Boss直聘招聘助手（macOS Safari 驱动 + DeepSeek Harness 插件与独立工作台）",
+  "keywords": [
+    "boss",
+    "boss-cli",
+    "boss直聘",
+    "safari",
+    "hr-automation",
+    "recruitment-automation",
+    "cli",
+    "agent"
+  ],
+  "homepage": "https://boss-cli.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sudo-zz/bosss.git"
+  },
+  "type": "module",
+  "main": "dist/cli/index.js",
+  "types": "dist/cli/index.d.ts",
+  "bin": {
+    "boss": "dist/cli/index.js",
+    "boss-dsh": "scripts/dsh-web.mjs"
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "packages",
+    "skills",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "npm run build && node dist/cli/index.js",
+    "doctor": "node dist/cli/index.js doctor",
+    "skill:sync": "bash skills/boss-safari-recruiter/scripts/bootstrap.sh .",
+    "skill:export": "bash skills/boss-safari-recruiter/scripts/export_portable_kit.sh ./dist-bundle",
+    "desk:build": "npm --prefix desk run build",
+    "desk": "npm run build && npm --prefix desk run build && node desk/server/index.mjs --open",
+    "desk:serve": "node desk/server/index.mjs",
+    "desk:dev": "npm --prefix desk run dev",
+    "dsh:web": "node scripts/dsh-web.mjs",
+    "release:pack": "node scripts/pack-release.mjs",
+    "release:serve": "node scripts/serve-update.mjs",
+    "data:build": "node web/build.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.3.3"
+  },
+  "license": "GPL-3.0"
+}

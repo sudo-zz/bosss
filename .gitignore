@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.env
+.env.deploy
+*.log
+.DS_Store
+**/.DS_Store
+.browser-profile/
+.boss-sessions/
+.agents/
+.workbuddy/
+
+# 候选人隐私与本地运行数据：只留在本机，严禁进入 Git 仓库
+data/
+dashboard/
+shortlist-report.md
+shortlist*.md
+web/pipeline.json
+web/data.js
+web/avatars/
+web/assets
+web/pdfs
+
+# 构建产物：npm run skill:export / npm run release:pack 可重新生成
+dist-bundle/
+release/
