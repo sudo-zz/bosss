@@ -100,9 +100,9 @@ ensure_dsh() {
     export PATH="$INSTALL_ROOT/npm-global/bin:$PATH"
   fi
 
-  if ! npm install -g "${prefix_args[@]}" @deepseek-ai/dsh; then
+  if ! npm install -g ${prefix_args[@]+"${prefix_args[@]}"} @deepseek-ai/dsh; then
     echo "▸ 默认 npm 源安装较慢或失败，切换国内镜像重试..."
-    npm install -g "${prefix_args[@]}" --registry=https://registry.npmmirror.com @deepseek-ai/dsh
+    npm install -g ${prefix_args[@]+"${prefix_args[@]}"} --registry=https://registry.npmmirror.com @deepseek-ai/dsh
   fi
 
   if ! command -v dsh >/dev/null 2>&1; then
