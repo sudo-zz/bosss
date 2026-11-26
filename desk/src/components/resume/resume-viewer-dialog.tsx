@@ -13,6 +13,7 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  Sparkles,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
@@ -23,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { OnlineResumePaper } from '@/components/resume/online-resume-paper'
 import { api } from '@/lib/api'
 import { SOURCE_META, normalizeSource, pdfResumeUrl, relativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -79,7 +81,7 @@ function ResumeViewerBody({
 
   const [onlineLoading, setOnlineLoading] = useState(Boolean(candidateName))
   const [onlineRecord, setOnlineRecord] = useState<OnlineResumeRecord | null>(null)
-  const [onlineView, setOnlineView] = useState<'text' | 'image'>('text')
+  const [onlineView, setOnlineView] = useState<'paper' | 'text' | 'image'>('paper')
   const [fitWidth, setFitWidth] = useState(true)
   const [scale, setScale] = useState(1)
   const [natural, setNatural] = useState({ w: 0, h: 0 })
@@ -97,8 +99,12 @@ function ResumeViewerBody({
       .then((rec) => {
         if (!cancelled) {
           setOnlineRecord(rec)
-          // Canvas / 图片简历没有可提取文本时直接展示截图，避免打开后一片空白
-          setOnlineView(String(rec.text || '').trim() ? 'text' : 'image')
+          // 优先用自有版式渲染结构化内容；没有结构化数据时回落到原文 / 截图
+          if (rec.structured && (rec.structured.sections?.length || rec.structured.name)) {
+            setOnlineView('paper')
+          } else {
+            setOnlineView(String(rec.text || '').trim() ? 'text' : 'image')
+          }
           setFitWidth(true)
           setScale(1)
           setOnlineLoading(false)
@@ -137,6 +143,12 @@ function ResumeViewerBody({
 
   const hasText = Boolean(String(onlineRecord?.text || '').trim())
   const hasImage = Boolean(onlineRecord?.screenshotUrl)
+  const hasPaper = Boolean(onlineRecord?.structured?.sections?.length)
+  const shotList = onlineRecord?.screenshotUrls?.length
+    ? onlineRecord.screenshotUrls
+    : onlineRecord?.screenshotUrl
+      ? [onlineRecord.screenshotUrl]
+      : []
   const imageWidth = useMemo(() => {
     if (!natural.w) return '100%'
     if (fitWidth) return '100%'
@@ -287,17 +299,25 @@ function ResumeViewerBody({
 
           {tab === 'online' && onlineRecord?.found && (
             <div className="flex flex-wrap items-center gap-1.5">
-              {hasText && hasImage && (
-                <Tabs value={onlineView} onValueChange={(v) => setOnlineView(v as 'text' | 'image')}>
+              {hasPaper && (
+                <Tabs value={onlineView} onValueChange={(v) => setOnlineView(v as 'paper' | 'text' | 'image')}>
                   <TabsList className="h-7 bg-muted/80 p-0.5">
-                    <TabsTrigger value="image" className="gap-1 px-2 text-[11px]">
-                      <ImageIcon className="size-3" />
-                      截图
+                    <TabsTrigger value="paper" className="gap-1 px-2 text-[11px]">
+                      <Sparkles className="size-3" />
+                      模板
                     </TabsTrigger>
-                    <TabsTrigger value="text" className="gap-1 px-2 text-[11px]">
-                      <FileText className="size-3" />
-                      文本
-                    </TabsTrigger>
+                    {hasImage && (
+                      <TabsTrigger value="image" className="gap-1 px-2 text-[11px]">
+                        <ImageIcon className="size-3" />
+                        截图
+                      </TabsTrigger>
+                    )}
+                    {hasText && (
+                      <TabsTrigger value="text" className="gap-1 px-2 text-[11px]">
+                        <FileText className="size-3" />
+                        原文
+                      </TabsTrigger>
+                    )}
                   </TabsList>
                 </Tabs>
               )}
@@ -338,9 +358,9 @@ function ResumeViewerBody({
                 </div>
               )}
 
-              {hasImage && onlineRecord.screenshotUrl && (
+              {onlineView === 'image' && shotList.length > 0 && (
                 <Button variant="outline" size="xs" className="h-7 gap-1 text-[11.5px]" asChild>
-                  <a href={onlineRecord.screenshotUrl} target="_blank" rel="noreferrer">
+                  <a href={shotList[0]} target="_blank" rel="noreferrer">
                     <ExternalLink className="size-3" />
                     原图
                   </a>
@@ -425,10 +445,14 @@ function ResumeViewerBody({
                       {onlineRecord.method}
                     </Badge>
                   )}
-                  {!hasText && hasImage && (
+                  {hasPaper ? (
+                    <span className="text-muted-foreground">
+                      已按模板重新排版{shotList.length > 1 ? ` · ${shotList.length} 屏截图已合并` : ''}
+                    </span>
+                  ) : !hasText && hasImage ? (
                     <span className="text-muted-foreground">该简历为 Canvas 渲染，无文本，已存截图</span>
-                  )}
-                  {hasImage && natural.w > 0 && (
+                  ) : null}
+                  {onlineView === 'image' && hasImage && natural.w > 0 && (
                     <span className="hidden text-muted-foreground tabular-nums sm:inline">
                       {natural.w} × {natural.h}
                     </span>
@@ -438,26 +462,36 @@ function ResumeViewerBody({
 
               {onlineView === 'image' && hasImage ? (
                 <div ref={imageWrapRef} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-muted/40 p-4">
-                  <img
-                    src={onlineRecord.screenshotUrl}
-                    alt={`${candidateName} 在线简历截图`}
-                    onLoad={(event) =>
-                      setNatural({
-                        w: event.currentTarget.naturalWidth,
-                        h: event.currentTarget.naturalHeight,
-                      })
-                    }
-                    style={{ width: imageWidth, maxWidth: 'none' }}
-                    className={cn(
-                      'block h-auto rounded-lg border bg-white shadow-xs',
-                      fitWidth ? 'mx-auto' : 'mx-0',
-                    )}
-                  />
+                  <div className={cn('space-y-3', fitWidth ? 'mx-auto' : 'mx-0')} style={{ width: imageWidth }}>
+                    {shotList.map((src, idx) => (
+                      <img
+                        key={src}
+                        src={src}
+                        alt={`${candidateName} 在线简历截图 ${idx + 1}`}
+                        onLoad={
+                          idx === 0
+                            ? (event) =>
+                                setNatural({
+                                  w: event.currentTarget.naturalWidth,
+                                  h: event.currentTarget.naturalHeight,
+                                })
+                            : undefined
+                        }
+                        className="block h-auto w-full rounded-lg border bg-white shadow-xs"
+                      />
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <ScrollArea className="min-h-0 flex-1">
                   <div className="space-y-4 p-5">
-                    {hasText ? (
+                    {onlineView === 'paper' && onlineRecord.structured ? (
+                      <OnlineResumePaper
+                        data={onlineRecord.structured}
+                        candidateName={candidateName}
+                        capturedAt={onlineRecord.capturedAt}
+                      />
+                    ) : hasText ? (
                       <FormattedOnlineResume text={onlineRecord.text || ''} />
                     ) : (
                       <div className="rounded-xl border border-dashed bg-card p-6 text-center text-[12px] text-muted-foreground">

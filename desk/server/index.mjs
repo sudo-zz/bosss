@@ -237,14 +237,21 @@ function readLocalOnlineResume(candidateName, explicitFile = '') {
       const data = JSON.parse(readFileSync(filePath, 'utf8'))
       const screenshotFile = data.screenshotPath ? path.basename(data.screenshotPath) : ''
       const hasShot = screenshotFile && existsSync(path.join(RESUME_SCREENSHOT_DIR, screenshotFile))
+      const shotList = Array.isArray(data.screenshotPaths) ? data.screenshotPaths : []
+      const screenshotUrls = shotList
+        .map((p) => path.basename(String(p)))
+        .filter((f) => f && existsSync(path.join(RESUME_SCREENSHOT_DIR, f)))
+        .map((f) => `/media/resumes/screenshots/${encodeURIComponent(f)}`)
       return {
         found: true,
         candidate: data.candidate || candidateName,
         capturedAt: data.capturedAt || statSync(filePath).mtime.toISOString(),
         method: data.method || 'local',
         text: String(data.text || ''),
+        structured: data.structured || null,
         screenshotFile: hasShot ? screenshotFile : undefined,
         screenshotUrl: hasShot ? `/media/resumes/screenshots/${encodeURIComponent(screenshotFile)}` : undefined,
+        screenshotUrls: screenshotUrls.length > 0 ? screenshotUrls : undefined,
         fileName: path.basename(filePath),
         filePath,
       }

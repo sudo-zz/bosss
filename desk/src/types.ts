@@ -96,6 +96,37 @@ export type LocalPdfFile = {
   url: string
 }
 
+export type OnlineResumeItem = {
+  headline?: string
+  org?: string
+  role?: string
+  period?: string
+  lines: string[]
+  tags?: string[]
+}
+
+export type OnlineResumeSection = {
+  key: string
+  title: string
+  items: OnlineResumeItem[]
+  paragraphs?: string[]
+  tags?: string[]
+}
+
+export type OnlineResumeStructured = {
+  name: string
+  headline?: string
+  expectation?: {
+    city?: string
+    position?: string
+    industry?: string
+    salary?: string
+  }
+  sections: OnlineResumeSection[]
+  source: 'ocr' | 'text'
+  builtAt: string
+}
+
 export type OnlineResumeRecord = {
   found: boolean
   candidate: string
@@ -104,6 +135,8 @@ export type OnlineResumeRecord = {
   text?: string
   screenshotFile?: string
   screenshotUrl?: string
+  screenshotUrls?: string[]
+  structured?: OnlineResumeStructured | null
   fileName?: string
   filePath?: string
 }

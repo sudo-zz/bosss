@@ -521,6 +521,20 @@ export class SafariPage {
   }
 
   /**
+   * 向当前窗口发送一次按键。
+   * 在线简历的 Canvas 渲染层不响应 JS 合成事件，只能用真实键盘事件触发滚动。
+   */
+  async pressKey(keyCode: number, times = 1): Promise<void> {
+    assertMacOS();
+    await this.activate();
+    await sleepRandom(180, 320);
+    for (let i = 0; i < times; i++) {
+      await runAppleScript(`tell application "System Events" to key code ${keyCode}`, []);
+      await sleepRandom(120, 220);
+    }
+  }
+
+  /**
    * 截取当前 Safari 窗口到 PNG 文件（用于简历为图片/Canvas 或显式要求截图的场景）。
    */
   async captureWindowScreenshot(absPath: string): Promise<{ ok: boolean; error?: string }> {
