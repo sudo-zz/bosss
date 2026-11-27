@@ -60,6 +60,16 @@ export type Candidate = {
   hasViewed?: boolean
   evalId?: string
   source?: CandidateSource | string
+  /** 索要简历 / 到岗确认跟进 */
+  askedResumeAt?: string
+  replyCity?: string
+  replyInShanghai?: boolean | null
+  replyInterview?: boolean | null
+  replySummary?: string
+  replyAt?: string
+  replyRaw?: string
+  resumeReceived?: boolean
+  isTop30?: boolean
   updatedAt?: string
   history?: { at: string; event: string; detail?: string }[]
 }

@@ -282,6 +282,58 @@ export function CandidateDetail({ candidate }: { candidate: Candidate | null }) 
 
           <TechStack text={stackText} />
 
+          {(candidate.askedResumeAt || candidate.replySummary || candidate.replyAt) && (
+            <section className="rounded-xl border bg-card p-3">
+              <div className="flex items-center justify-between gap-2">
+                <SectionTitle>沟通跟进</SectionTitle>
+                <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                  {candidate.replyAt
+                    ? `回复 ${candidate.replyAt.slice(5, 16).replace('T', ' ')}`
+                    : candidate.askedResumeAt
+                      ? `已询问 ${candidate.askedResumeAt.slice(5, 16).replace('T', ' ')}`
+                      : ''}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {candidate.askedResumeAt && (
+                  <Badge variant="outline" className="h-5 rounded px-1.5 text-[10px] font-normal">
+                    已索要简历
+                  </Badge>
+                )}
+                {candidate.replyInShanghai === true && (
+                  <Badge className="h-5 rounded border-transparent bg-emerald-500/12 px-1.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                    在上海
+                  </Badge>
+                )}
+                {candidate.replyInShanghai === false && (
+                  <Badge className="h-5 rounded border-transparent bg-amber-500/12 px-1.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                    {candidate.replyCity ? `不在上海 · ${candidate.replyCity}` : '不在上海'}
+                  </Badge>
+                )}
+                {candidate.replyInterview === true && (
+                  <Badge className="h-5 rounded border-transparent bg-emerald-500/12 px-1.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                    可现场面试
+                  </Badge>
+                )}
+                {candidate.replyInterview === false && (
+                  <Badge className="h-5 rounded border-transparent bg-rose-500/12 px-1.5 text-[10px] font-medium text-rose-700 dark:text-rose-400">
+                    暂不便面试
+                  </Badge>
+                )}
+                {candidate.resumeReceived && (
+                  <Badge className="h-5 rounded border-transparent bg-sky-500/12 px-1.5 text-[10px] font-medium text-sky-700 dark:text-sky-400">
+                    已收到简历
+                  </Badge>
+                )}
+              </div>
+              {candidate.replySummary && (
+                <p className="mt-2 rounded-lg bg-muted/50 px-2.5 py-1.5 text-[11.5px] leading-relaxed text-foreground/80">
+                  {candidate.replySummary}
+                </p>
+              )}
+            </section>
+          )}
+
           {dims.length > 0 && (
             <section>
               <SectionTitle>评分维度拆解</SectionTitle>

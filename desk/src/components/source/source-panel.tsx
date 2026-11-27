@@ -3,6 +3,7 @@ import { motion } from 'motion/react'
 import {
   ArrowDownUp,
   Briefcase,
+  CalendarCheck,
   Columns3,
   Copy,
   Crown,
@@ -74,6 +75,7 @@ function quickFiltersForSource(sourceFilter: SourceFilterKey): QuickFilterSpec[]
   if (sourceFilter === 'recommend' || sourceFilter === 'featured') {
     return [
       { key: 'not_greeted', label: '待打招呼', icon: Hand },
+      { key: 'top30', label: '评分前 30%', icon: Crown },
       { key: 'active_now', label: '在线 / 刚活跃', icon: Radio },
       { key: 'shanghai', label: '仅上海', icon: MapPin },
       { key: 'has_local_resume', label: '已存本地简历', icon: FileText },
@@ -83,7 +85,9 @@ function quickFiltersForSource(sourceFilter: SourceFilterKey): QuickFilterSpec[]
   if (sourceFilter === 'message') {
     return [
       { key: 'high_uncontacted', label: '高分 ≥70', icon: Flame },
+      { key: 'top30', label: '评分前 30%', icon: Crown },
       { key: 'shanghai', label: '仅上海', icon: MapPin },
+      { key: 'can_interview', label: '可现场面试', icon: CalendarCheck },
       { key: 'awaiting_reply', label: '待跟进/未读', icon: MessageSquare },
       { key: 'has_local_resume', label: '已存简历', icon: FileText },
       { key: 'has_eval_or_img', label: '已评/附图', icon: Sparkles },
@@ -91,7 +95,9 @@ function quickFiltersForSource(sourceFilter: SourceFilterKey): QuickFilterSpec[]
   }
   return [
     { key: 'high_uncontacted', label: '高分 ≥70', icon: Flame },
+    { key: 'top30', label: '评分前 30%', icon: Crown },
     { key: 'shanghai', label: '仅上海', icon: MapPin },
+    { key: 'can_interview', label: '可现场面试', icon: CalendarCheck },
     { key: 'has_local_resume', label: '已存简历', icon: FileText },
     { key: 'active_now', label: '在线/刚活跃', icon: Radio },
     { key: 'has_eval_or_img', label: '已评/附图', icon: Sparkles },
@@ -745,6 +751,14 @@ export function CandidateRow({
                 {tier.label}
               </span>
             )}
+            {candidate.isTop30 && (
+              <span
+                title="岗位评分前 30% 重点池"
+                className="rounded bg-amber-500/15 px-1 py-0.2 text-[9.5px] leading-tight font-semibold text-amber-700 dark:text-amber-400"
+              >
+                前30%
+              </span>
+            )}
             <Badge className={cn('h-4.5 rounded px-1.5 text-[10px] font-normal', STAGE_CLASS[candidate.stage])}>
               {STAGE_LABEL[candidate.stage]}
             </Badge>
@@ -783,6 +797,42 @@ export function CandidateRow({
               <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
                 <ImageIcon className="size-2.5" />
                 附图
+              </span>
+            )}
+            {candidate.replyInShanghai === true && (
+              <span
+                title={candidate.replySummary || '候选人在上海'}
+                className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
+              >
+                <MapPin className="size-2.5" />
+                上海
+              </span>
+            )}
+            {candidate.replyInShanghai === false && (
+              <span
+                title={candidate.replySummary || '候选人不在上海'}
+                className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400"
+              >
+                <MapPin className="size-2.5" />
+                {candidate.replyCity || '外地'}
+              </span>
+            )}
+            {candidate.replyInterview === true && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+                <Hand className="size-2.5" />
+                可面试
+              </span>
+            )}
+            {candidate.replyInterview === false && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] text-rose-600 dark:text-rose-400">
+                <Hand className="size-2.5" />
+                不便面试
+              </span>
+            )}
+            {candidate.resumeReceived && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-rose-600 dark:text-rose-400">
+                <FileText className="size-2.5" />
+                已收简历
               </span>
             )}
           </div>

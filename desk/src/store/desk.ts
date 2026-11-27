@@ -32,6 +32,8 @@ export type QuickFilterKey =
   | 'has_local_resume'
   | 'active_now'
   | 'not_greeted'
+  | 'can_interview'
+  | 'top30'
 export type ThemeMode = 'light' | 'dark'
 
 function readInitialTheme(): ThemeMode {
@@ -237,8 +239,17 @@ export function matchesQuickFilter(candidate: Candidate, quickFilter: QuickFilte
     return (candidate.score ?? 0) >= 70 && ['new', 'screened', 'shortlisted'].includes(candidate.stage)
   }
   if (quickFilter === 'shanghai') {
+    // 候选人已明确回复城市时以回复为准，避免「期望城市上海但人已离开」被误判
+    if (candidate.replyInShanghai === true) return true
+    if (candidate.replyInShanghai === false) return false
     const city = resolvedFacts(candidate).city
     return Boolean(city && city.includes('上海'))
+  }
+  if (quickFilter === 'can_interview') {
+    return candidate.replyInterview === true
+  }
+  if (quickFilter === 'top30') {
+    return candidate.isTop30 === true
   }
   if (quickFilter === 'awaiting_reply') {
     return (

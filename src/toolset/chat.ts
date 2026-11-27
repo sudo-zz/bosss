@@ -395,7 +395,11 @@ export async function scrapeCurrentChatMessages(page: SafariPage): Promise<ChatM
           const resumeIcon = friendRoot.querySelector(".resume-icon");
           const title = norm(friendRoot.querySelector(".message-card-top-title")?.textContent);
           const cardBtn = norm(friendRoot.querySelector(".message-card-buttons .card-btn")?.textContent);
-          if (resumeIcon || /附件简历|点击预览/.test(title + cardBtn)) hasFriendResumeAttachment = true;
+          // 「对方想发送附件简历，您是否同意」只是交换请求卡，不代表已收到附件
+          const isExchangeRequest = /想发送附件简历|是否同意/.test(title + cardBtn);
+          if (!isExchangeRequest && (resumeIcon || /附件简历|点击预览/.test(title + cardBtn))) {
+            hasFriendResumeAttachment = true;
+          }
           const parts = [title, cardBtn].filter(Boolean);
           friendText = parts.length ? parts.join(" · ") : norm(friendRoot.querySelector(".text")?.textContent);
         }
@@ -545,6 +549,19 @@ export async function runOpenCandidateChat(
   await ensureChatListReady(page);
   if (!isBossChatIndexUrl(await page.url())) {
     throw new Error('当前不在沟通列表页（/web/chat/index），无法打开候选人聊天。');
+  }
+
+  // 当前右侧已打开的就是目标候选人时直接复用，避免每次都从头滚动会话列表
+  // （批量发消息场景下这一步能把「逐个找人」的耗时从分钟级降到秒级）
+  const openedName = await page.eval<string>(`
+    const el = document.querySelector(".base-info-single-container .name-box");
+    return (el?.textContent ?? "").replace(/\\s+/g, " ").trim();
+  `);
+  if (openedName) {
+    const hit = exact ? openedName === targetName : openedName.includes(targetName);
+    if (hit) {
+      return renderOpenedCandidateChat(page, openedName, { exact: true, json: opts.json });
+    }
   }
 
   await scrollChatListToTop(page);

@@ -57,6 +57,23 @@ export type TrackedCandidate = {
   resumeScreenshotPath?: string;
   resumePdfPath?: string;
   onlineResumePath?: string;
+  /** 首次向该候选人索要简历 + 确认到岗信息的时间 */
+  askedResumeAt?: string;
+  /** 候选人回复中的城市，如「上海」「杭州」 */
+  replyCity?: string;
+  /** 是否明确在上海；null/undefined 表示未提及 */
+  replyInShanghai?: boolean | null;
+  /** 是否可现场面试；null/undefined 表示未提及 */
+  replyInterview?: boolean | null;
+  /** 回复摘要，看板一句话展示 */
+  replySummary?: string;
+  /** 候选人最新一条回复原文 */
+  replyRaw?: string;
+  replyAt?: string;
+  /** 是否已收到对方附件简历 */
+  resumeReceived?: boolean;
+  /** 是否属于岗位评分前 30% 的重点池 */
+  isTop30?: boolean;
   createdAt: string;
   updatedAt: string;
   history: Array<{ at: string; event: string; detail?: string }>;
@@ -168,6 +185,15 @@ export function upsertTrackedCandidate(input: {
   resumeScreenshotPath?: string;
   resumePdfPath?: string;
   onlineResumePath?: string;
+  askedResumeAt?: string;
+  replyCity?: string;
+  replyInShanghai?: boolean | null;
+  replyInterview?: boolean | null;
+  replySummary?: string;
+  replyRaw?: string;
+  replyAt?: string;
+  resumeReceived?: boolean;
+  isTop30?: boolean;
   event?: string;
   eventDetail?: string;
 }): TrackedCandidate {
@@ -203,6 +229,16 @@ export function upsertTrackedCandidate(input: {
     resumeScreenshotPath: input.resumeScreenshotPath || existing?.resumeScreenshotPath,
     resumePdfPath: input.resumePdfPath || existing?.resumePdfPath,
     onlineResumePath: input.onlineResumePath || existing?.onlineResumePath,
+    askedResumeAt: input.askedResumeAt || existing?.askedResumeAt,
+    replyCity: input.replyCity !== undefined ? input.replyCity : existing?.replyCity,
+    replyInShanghai:
+      input.replyInShanghai !== undefined ? input.replyInShanghai : existing?.replyInShanghai,
+    replyInterview: input.replyInterview !== undefined ? input.replyInterview : existing?.replyInterview,
+    replySummary: input.replySummary || existing?.replySummary,
+    replyRaw: input.replyRaw || existing?.replyRaw,
+    replyAt: input.replyAt || existing?.replyAt,
+    resumeReceived: input.resumeReceived !== undefined ? input.resumeReceived : existing?.resumeReceived,
+    isTop30: input.isTop30 !== undefined ? input.isTop30 : existing?.isTop30,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     history: [...(existing?.history ?? [])],

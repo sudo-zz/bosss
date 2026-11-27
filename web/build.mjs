@@ -341,6 +341,7 @@ function mergeCandidates({ tracker, scoredXmt, scoredAi, evalByName, evalPdfByNa
       hasViewed: Boolean(t?.hasViewed || t?.onlineResumePath || t?.resumeTextPath),
       links: c.links || [],
       source: 'message',
+      ...outreachFields(t),
       evalId: evalByName.get(c.name) || '',
       createdAt: t?.createdAt || '',
       updatedAt: t?.updatedAt || '',
@@ -391,6 +392,7 @@ function mergeCandidates({ tracker, scoredXmt, scoredAi, evalByName, evalPdfByNa
       hasViewed: Boolean(t.hasViewed || t.onlineResumePath || t.resumeTextPath),
       links: [],
       source: normalizeSource(t.source),
+      ...outreachFields(t),
       evalId: evalByName.get(t.name) || '',
       createdAt: t.createdAt || '',
       updatedAt: t.updatedAt || '',
@@ -462,6 +464,7 @@ function mergeCandidates({ tracker, scoredXmt, scoredAi, evalByName, evalPdfByNa
       hasViewed: Boolean(s.hasViewed || t?.onlineResumePath || t?.resumeTextPath),
       links: [],
       source: s.sourceTab,
+      ...outreachFields(t),
       evalId: evalByName.get(s.name) || '',
       createdAt: s.fetchedAt || '',
       updatedAt: s.fetchedAt || '',
@@ -488,6 +491,21 @@ function inferStage(messages = [], currentStage = 'new') {
   if (last.from === 'myself' && currentStage !== 'replied') return 'greeted';
   if (last.from === 'friend' && hadOutbound && currentStage !== 'replied') return 'replied';
   return '';
+}
+
+/** 索要简历 / 是否在上海 / 能否面试的跟进结果（看板展示用） */
+function outreachFields(t) {
+  if (!t) return {};
+  return {
+    askedResumeAt: t.askedResumeAt || '',
+    replyCity: t.replyCity || '',
+    replyInShanghai: typeof t.replyInShanghai === 'boolean' ? t.replyInShanghai : null,
+    replyInterview: typeof t.replyInterview === 'boolean' ? t.replyInterview : null,
+    replySummary: t.replySummary || '',
+    replyAt: t.replyAt || '',
+    resumeReceived: Boolean(t.resumeReceived),
+    isTop30: Boolean(t.isTop30),
+  };
 }
 
 function lastFriendText(messages = []) {
