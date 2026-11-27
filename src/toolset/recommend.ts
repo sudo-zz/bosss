@@ -322,8 +322,9 @@ export async function readRecommendList(
   page: SafariPage,
   opts: { limit?: number } = {},
 ): Promise<RecommendCandidate[]> {
-  const limit = opts.limit && opts.limit > 0 ? Math.min(opts.limit, 80) : 20;
-  const maxScrollRounds = limit > 12 ? 6 : 0;
+  const limit = opts.limit && opts.limit > 0 ? Math.min(opts.limit, 120) : 20;
+  // 每滚动一轮大约多加载 10 张卡，按目标数量推算轮次，避免固定 6 轮拿不满
+  const maxScrollRounds = limit > 12 ? Math.min(16, Math.ceil(limit / 10) + 2) : 0;
 
   for (let round = 0; round < maxScrollRounds; round++) {
     const count = await page.evalInFrame<number>(
@@ -386,7 +387,16 @@ export async function readRecommendList(
     { sel: RECOMMEND_CARD_ROOT_SELECTOR },
   );
 
-  return raw.slice(0, limit).map((c, idx) => {
+  // 同一张卡同时命中 .card-item 与 .candidate-card-wrap，会被采集两遍，这里按 geekId 去重
+  const seen = new Set<string>();
+  const unique = raw.filter((c) => {
+    const key = c.geekId || `${c.name}|${c.baseInfo}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return unique.slice(0, limit).map((c, idx) => {
     const tracked = findTrackedCandidate({ geekId: c.geekId, name: c.name });
     return {
       index: idx + 1,

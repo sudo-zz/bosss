@@ -48,6 +48,11 @@ const DIM_META = {
   ai: { label: 'AI 工具', max: 20 },
   data: { label: '数据复盘', max: 15 },
   base: { label: '硬性条件', max: 10 },
+  guide: { label: '讲解经验', max: 30 },
+  express: { label: '表达形象', max: 25 },
+  service: { label: '服务接待', max: 15 },
+  major: { label: '专业背景', max: 10 },
+  stability: { label: '经验匹配', max: 10 },
 };
 
 const POSITIONS = [
@@ -68,6 +73,15 @@ const POSITIONS = [
     city: '上海 · 奉贤',
     mode: '现场面试',
     match: /新媒体|运营|内容|文案/i,
+  },
+  {
+    id: 'jiangjie',
+    name: '讲解员',
+    short: '讲解员',
+    salary: '7-10K',
+    city: '上海 · 奉贤',
+    mode: '现场面试',
+    match: /讲解|导览|展厅|博物馆|导游|研学|主持|播音/,
   },
 ];
 
@@ -340,7 +354,8 @@ function mergeCandidates({ tracker, scoredXmt, scoredAi, evalByName, evalPdfByNa
   const seen = new Set(rows.map((r) => `${r.name}::${r.job}`));
   for (const t of Object.values(tracker.candidates || {})) {
     if (usedTracker.has(t.id)) continue;
-    const key = `${t.name}::${t.job}`;
+    // 用台账 id 判重：掩码姓名（王女士/文女士）可能撞名，但不能当成同一个人
+    const key = `id:${t.id}`;
     if (seen.has(key)) continue;
     seen.add(key);
     rows.push({
@@ -393,11 +408,20 @@ function mergeCandidates({ tracker, scoredXmt, scoredAi, evalByName, evalPdfByNa
   }
 
   // 合并推荐牛人 / 精选牛人快照中尚未进入 tracker 的候选人
+  // 推荐快照只用于「还没进台账」的岗位补充展示；已经在扫描的岗位以台账为准
+  const scannedPositions = new Set(
+    Object.values(tracker.candidates || {}).map((t) => posOf(t.job || '')),
+  );
   for (const s of sourcingItems) {
     const key = `${s.name}::${s.job}`;
     if (seen.has(key)) continue;
+    if (scannedPositions.has(posOf(s.job))) continue;
+    // 快照里的岗位名带城市薪资（「讲解员 _ 上海 7-10K」），与台账岗位名不一致；
+    // 只要同一人已在同岗位台账里，就以台账为准，避免同一 id 出现两条。
+    const known = trackerByName.get(s.name);
+    if (known && posOf(known.job) === posOf(s.job)) continue;
     seen.add(key);
-    const t = trackerByName.get(s.name);
+    const t = known;
     const summaryParts = [
       ...String(s.baseInfo || '').split('/').map((x) => x.trim()).filter(Boolean),
       s.expect || '',
